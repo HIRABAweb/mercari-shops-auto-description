@@ -1,0 +1,6 @@
+functions-framework
+google-cloud-storage
+google-cloud-secret-manager
+google-generativeai
+gspread
+google-auth
