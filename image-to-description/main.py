@@ -46,7 +46,7 @@ PROMPT_TEXT = load_prompt_from_gcs(PROMPT_BUCKET_NAME, PROMPT_FILE_NAME)
 
 
 @functions_framework.cloud_event
-def XXXtrigger(cloud_event):
+def generate_description_from_trigger(cloud_event):
     """GCSにトリガーファイルが作成されたことを検知して商品説明文を生成する関数"""
     # プロンプトが正常に読み込めているか最初にチェック
     if PROMPT_TEXT is None:
