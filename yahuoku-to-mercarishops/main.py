@@ -65,7 +65,7 @@ model = genai.GenerativeModel("gemini-2.5-flash-lite")
 storage_client = storage.Client()
 
 @functions_framework.cloud_event
-def XXXlisting(cloud_event):
+def generate_dual_listing(cloud_event):
     data = cloud_event.data
     bucket_name = data["bucket"]
     file_name = data["name"]
