@@ -1,216 +1,216 @@
-import functions_framework
-from google.cloud import storage
-from google.cloud import secretmanager
-import google.generativeai as genai
+"""Cloud Storage event handler for Mercari Shops and Yahoo Auctions listing data."""
+
 import os
-import gspread
-from google.oauth2.service_account import Credentials
+
+import functions_framework
 import google.auth
+import google.generativeai as genai
+import gspread
+from google.api_core.exceptions import PreconditionFailed
+from google.cloud import secretmanager, storage
 
-# --- ここを自分の環境に合わせて変更 ---
-# Google CloudのプロジェクトID
+from listing_data import build_mercari_row, build_yahoo_row, collect_sorted_image_urls
+
+# Deployment settings. Values are intentionally not committed to this repository.
 PROJECT_ID = ""
-# Secret Managerに保存したAPIキーのシークレット名
 SECRET_NAME = ""
-# スプレッドシートID (URLの /d/〇〇〇/edit の〇〇〇部分)
 SPREADSHEET_ID = ""
-# メルカリ用シート名
 SHEET_NAME_MERCARI = "Mercari_List"
-# ヤフオク(オークタウン)用シート名
 SHEET_NAME_YAHOO = "Yahoo_List"
-# ----------------
-
-# プロンプトを置いているバケットとファイル名
-PROMPT_BUCKET_NAME = "" # prompt.txtがあるバケット
+PROMPT_BUCKET_NAME = ""
 PROMPT_FILE_NAME = ".txt"
-# ------------------
+MODEL_NAME = "gemini-2.5-flash-lite"
 
-# Secret ManagerからAPIキーを取得
-def get_api_key():
+DESCRIPTION_FILE_NAME = "_description.txt"
+PROCESSED_FILE_NAME = "_processed.txt"
+PROCESSING_LOCK_FILE_NAME = "_processing.lock"
+
+
+def get_api_key() -> str:
+    """Read the Gemini API key from Secret Manager."""
     try:
-        client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = client.access_secret_version(request={"name": name})
+        secret_client = secretmanager.SecretManagerServiceClient()
+        secret_version = (
+            f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
+        )
+        response = secret_client.access_secret_version(request={"name": secret_version})
         return response.payload.data.decode("UTF-8")
-    except Exception as e:
-        print(f"ERROR: APIキーの取得に失敗: {e}")
+    except Exception as error:
+        print(f"ERROR: APIキーの取得に失敗しました: {error}")
         raise
 
-# Cloud Storageからプロンプトテキストを読み込む
-def get_prompt_from_gcs():
+
+def get_prompt_from_gcs() -> str:
+    """Load the Mercari Shops description prompt, with the existing fallback."""
     try:
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(PROMPT_BUCKET_NAME)
-        blob = bucket.blob(PROMPT_FILE_NAME)
-        return blob.download_as_text()
-    except Exception as e:
-        print(f"WARNING: プロンプト({PROMPT_FILE_NAME})の読み込みに失敗。デフォルトを使用します。: {e}")
+        prompt_blob = storage_client.bucket(PROMPT_BUCKET_NAME).blob(PROMPT_FILE_NAME)
+        return prompt_blob.download_as_text()
+    except Exception as error:
+        print(
+            f"WARNING: プロンプト({PROMPT_FILE_NAME})の読み込みに失敗。"
+            f"デフォルトを使用します: {error}"
+        )
         return "商品の魅力を伝える商品説明文を作成してください。"
 
-# スプレッドシート接続設定
-def get_worksheets():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds, _ = google.auth.default(scopes=scopes)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
-    
-    # 両方のシートを取得 (存在しない場合はエラーになるため事前に作成が必要)
-    sheet_m = spreadsheet.worksheet(SHEET_NAME_MERCARI)
-    sheet_y = spreadsheet.worksheet(SHEET_NAME_YAHOO)
-    return sheet_m, sheet_y
 
-# 初期設定
+def get_worksheets():
+    """Open both destination worksheets using the Cloud Run service account."""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    credentials, _ = google.auth.default(scopes=scopes)
+    spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
+    return (
+        spreadsheet.worksheet(SHEET_NAME_MERCARI),
+        spreadsheet.worksheet(SHEET_NAME_YAHOO),
+    )
+
+
+def is_description_file(object_name: str) -> bool:
+    """Return whether an object should start listing-data generation."""
+    return object_name.endswith(DESCRIPTION_FILE_NAME)
+
+
+def product_folder_from(object_name: str) -> str:
+    """Return the GCS product folder, which is also used as the management code."""
+    return os.path.dirname(object_name)
+
+
+def replace_description_suffix(description_file_name: str, replacement_suffix: str) -> str:
+    """Replace only the trigger-file suffix, leaving similarly named folders intact."""
+    return f"{description_file_name.removesuffix(DESCRIPTION_FILE_NAME)}{replacement_suffix}"
+
+
+def acquire_processing_lock(bucket, description_file_name: str):
+    """Atomically claim an object so duplicate Cloud Storage events do not run twice."""
+    lock_file_name = replace_description_suffix(
+        description_file_name,
+        PROCESSING_LOCK_FILE_NAME,
+    )
+    lock_blob = bucket.blob(lock_file_name)
+    try:
+        # GCS creates the lock only when no generation of that object exists.
+        lock_blob.upload_from_string("", content_type="text/plain", if_generation_match=0)
+    except PreconditionFailed:
+        print(f"INFO: {description_file_name} は別の処理が実行中です。")
+        return None
+    return lock_blob
+
+
+def mark_description_as_processed(
+    bucket,
+    description_blob,
+    description_file_name: str,
+    source_generation,
+) -> None:
+    """Mark the source as processed only after both listing rows were appended."""
+    processed_file_name = replace_description_suffix(
+        description_file_name,
+        PROCESSED_FILE_NAME,
+    )
+    bucket.copy_blob(
+        description_blob,
+        bucket,
+        processed_file_name,
+        if_generation_match=0,
+        if_source_generation_match=source_generation,
+    )
+    description_blob.delete(if_generation_match=source_generation)
+    print(
+        f"INFO: {description_file_name} を {processed_file_name} にリネームしました"
+        "（処理完了）。"
+    )
+
+
+def generate_mercari_description(yahoo_description: str) -> str:
+    """Generate the platform-specific Mercari Shops description."""
+    prompt = f"{get_prompt_from_gcs()}\n\n【商品情報】\n{yahoo_description}\n"
+    return model.generate_content(prompt).text
+
+
+def append_listing_rows(mercari_row: list[str], yahoo_row: list[str]) -> None:
+    """Append the completed rows to their respective worksheets."""
+    mercari_sheet, yahoo_sheet = get_worksheets()
+    mercari_sheet.append_row(mercari_row)
+    print(f"SUCCESS: メルカリ用シート({SHEET_NAME_MERCARI})に出力しました。")
+    yahoo_sheet.append_row(yahoo_row)
+    print(f"SUCCESS: ヤフオク用シート({SHEET_NAME_YAHOO})に出力しました。")
+
+
 genai.configure(api_key=get_api_key())
-model = genai.GenerativeModel("gemini-2.5-flash-lite")
+model = genai.GenerativeModel(MODEL_NAME)
 storage_client = storage.Client()
 
-@functions_framework.cloud_event
-def XXXlisting(cloud_event):
-    data = cloud_event.data
-    bucket_name = data["bucket"]
-    file_name = data["name"]
 
-    # _description.txt 以外は処理しない
-    if not file_name.endswith("_description.txt"):
+@functions_framework.cloud_event
+def generate_dual_listing(cloud_event):
+    """Create and append Mercari Shops and Yahoo Auctions rows for a description file."""
+    event_data = cloud_event.data
+    bucket_name = event_data["bucket"]
+    description_file_name = event_data["name"]
+
+    if not is_description_file(description_file_name):
         return
 
-    print(f"INFO: 処理開始: gs://{bucket_name}/{file_name}")
-
+    print(f"INFO: 処理開始: gs://{bucket_name}/{description_file_name}")
+    processing_lock = None
     try:
-        # 1. ヤフオク情報の読み込み & 重複防止のリネーム（ロック）
-        source_bucket = storage_client.bucket(bucket_name)
-        source_blob = source_bucket.blob(file_name)
-
-        # ファイルが存在するか確認（二重起動防止）
-        if not source_blob.exists():
-            print(f"INFO: {file_name} は既に他の処理によって削除またはリネームされています。")
+        bucket = storage_client.bucket(bucket_name)
+        source_generation = event_data.get("generation")
+        description_blob = bucket.blob(
+            description_file_name,
+            generation=source_generation,
+        )
+        if not description_blob.exists():
+            print(f"INFO: {description_file_name} は既に処理されています。")
             return
 
-        # テキスト内容を読み込む
-        yahoo_info_text = source_blob.download_as_text()
+        # Use the event generation when present, then lock before any external call.
+        # This prevents concurrent deliveries of the same event from appending twice.
+        if source_generation is None:
+            description_blob.reload()
+            source_generation = description_blob.generation
+        processing_lock = acquire_processing_lock(bucket, description_file_name)
+        if processing_lock is None:
+            # Do not acknowledge this delivery while another worker owns the lock.
+            # The source still exists, so an event retry can take over after failure.
+            raise RuntimeError(f"処理ロックを取得できません: {description_file_name}")
 
-        # フォルダ名を商品管理コードとして使用
-        folder_path = os.path.dirname(file_name)
-        item_manage_code = folder_path.split("/")[-1] if "/" in folder_path else folder_path
+        yahoo_description = description_blob.download_as_text()
+        folder_path = product_folder_from(description_file_name)
+        item_manage_code = folder_path.split("/")[-1] if folder_path else ""
 
-        # 即座にリネームして、後続の同一イベントが走れないようにする
-        new_file_name = file_name.replace("_description.txt", "_processed.txt")
-        source_bucket.copy_blob(source_blob, source_bucket, new_file_name)
-        source_blob.delete()
-        print(f"INFO: {file_name} を {new_file_name} にリネームしました（重複防止ロック）。")
-
-        # 2. 画像URLのリストアップ
-        blobs = storage_client.list_blobs(bucket_name, prefix=f"{folder_path}/")
-        image_urls = []
-        for blob in blobs:
-            if blob.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                public_url = f"https://storage.googleapis.com/{bucket_name}/{blob.name}"
-                image_urls.append(public_url)
-
-        # ファイル名の数字順にソート（001, 002, 003...）
-        import re
-        def extract_number(url):
-            # URLからファイル名を取得
-            filename = url.split('/')[-1]
-            # ファイル名から最初の数字を抽出
-            match = re.search(r'(\d+)', filename)
-            return int(match.group(1)) if match else 999999
-        
-        image_urls.sort(key=extract_number)
-
-        # 3. プロンプト取得とAI生成
-        system_prompt = get_prompt_from_gcs()
-        
-        final_prompt = f"""
-        {system_prompt}
-
-        【商品情報】
-        {yahoo_info_text}
-        """
-        
-        response = model.generate_content(final_prompt)
-        generated_description = response.text
-
-        # ==========================================
-        # 4-A. メルカリShops用データ作成 (既存ロジック)
-        # ==========================================
-        row_mercari = [""] * 73
-        for i in range(min(len(image_urls), 20)):
-            row_mercari[i] = image_urls[i]
-        
-        row_mercari[20] = "【要修正】商品名" # 商品名
-        row_mercari[21] = generated_description # 説明文
-        row_mercari[22] = "one size" 
-        row_mercari[23] = "1"
-        row_mercari[24] = item_manage_code # SKU管理コード
-        row_mercari[62] = "" # ブランドID
-        row_mercari[63] = "50000" # 販売価格
-        row_mercari[64] = "" # カテゴリID
-        row_mercari[65] = "3" # 商品の状態
-        row_mercari[66] = "3" # 配送方法
-        row_mercari[67] = "jp34" # 地域
-        row_mercari[68] = "2" # 発送日
-        row_mercari[69] = "1" # ステータス
-        row_mercari[70] = "1" # 配送料負担
-
-        # ==========================================
-        # 4-B. ヤフオク(オークタウン)用データ作成
-        # ==========================================
-        # 取得したヘッダーマップ(0-113)に基づいて全114列を作成
-        row_yahoo = [""] * 114
-
-        # ヤフオクの説明文は元のテキストをそのまま使用（改行をHTMLタグに変換）
-        yahoo_description_raw_html = yahoo_info_text.replace("\n", "<br>")
-
-        # 基本情報
-        row_yahoo[0] = "【要修正】カテゴリID" # 0: カテゴリ
-        row_yahoo[1] = f"【要修正】商品名 (管理コード: {item_manage_code})" # 1: タイトル
-        row_yahoo[2] = yahoo_description_raw_html # 2: 説明
-        row_yahoo[3] = "49999" # 3: 開始価格
-        row_yahoo[4] = "50000" # 4: 即決価格
-        row_yahoo[5] = "1" # 5: 個数
-        row_yahoo[6] = "3" # 6: 開催期間 (3日間)
-        row_yahoo[7] = "22" # 7: 終了時間 (22時)
-
-        # 画像設定 (9, 11, 13, 15, 17, 19, 21, 23, 25, 27)
-        for i in range(min(len(image_urls), 10)):
-            target_idx = 9 + (i * 2)
-            if target_idx < len(row_yahoo):
-                row_yahoo[target_idx] = image_urls[i]
-
-        # 配送・支払・その他設定 (デフォルト値)
-        row_yahoo[29] = "広島県" # 29: 商品発送元の都道府県
-        row_yahoo[31] = "出品者" # 31: 送料負担 (1: 出品者)
-        row_yahoo[32] = "先払い" # 32: 代金支払い
-        row_yahoo[33] = "はい" # 33: Yahoo!かんたん決済
-        row_yahoo[34] = "はい" # 34: かんたん取引
-        row_yahoo[35] = "いいえ" # 35: 商品代引
-        row_yahoo[36] = "目立った傷や汚れなし" # 36: 商品の状態
-        row_yahoo[38] = "返品不可" # 38: 返品の可否
-        row_yahoo[40] = "はい" # 40: 入札者評価制限
-        row_yahoo[41] = "はい" # 41: 悪い評価の割合での制限
-        row_yahoo[42] = "いいえ" # 42: 入札者認証制限
-        row_yahoo[43] = "はい" # 43: 自動延長
-        row_yahoo[44] = "いいえ" # 44: 早期終了
-        row_yahoo[45] = "いいえ" # 45: 値下げ交渉
-        row_yahoo[46] = "0" # 46: 自動再出品
-        row_yahoo[47] = "いいえ" # 47: 自動値下げ
-        row_yahoo[51] = "はい" # 51: 送料固定
-        row_yahoo[56] = "はい" # 56: ネコ宅急便 (おてがる配送)
-        row_yahoo[61] = "2日～3日" # 61: 発送までの日数
-        row_yahoo[112] = "いいえ" # 112: 受け取り後決済サービス
-        row_yahoo[113] = "いいえ" # 113: 海外発送
-
-        # 5. スプレッドシートへ書き込み (両方のシートへ)
-        sheet_mercari, sheet_yahoo = get_worksheets()
-        
-        sheet_mercari.append_row(row_mercari)
-        print(f"SUCCESS: メルカリ用シート({SHEET_NAME_MERCARI})に出力しました。")
-
-        sheet_yahoo.append_row(row_yahoo)
-        print(f"SUCCESS: ヤフオク用シート({SHEET_NAME_YAHOO})に出力しました。")
-        
-        print(f"ALL DONE: 管理コード: {item_manage_code}")
-
-    except Exception as e:
-        print(f"ERROR: 処理中にエラーが発生しました: {e}")
+        image_urls = collect_sorted_image_urls(
+            storage_client.list_blobs(bucket_name, prefix=f"{folder_path}/"),
+            bucket_name,
+        )
+        mercari_description = generate_mercari_description(yahoo_description)
+        mercari_row = build_mercari_row(
+            image_urls=image_urls,
+            item_manage_code=item_manage_code,
+            description=mercari_description,
+        )
+        yahoo_row = build_yahoo_row(
+            image_urls=image_urls,
+            item_manage_code=item_manage_code,
+            description=yahoo_description,
+        )
+        append_listing_rows(mercari_row, yahoo_row)
+        mark_description_as_processed(
+            bucket,
+            description_blob,
+            description_file_name,
+            source_generation,
+        )
+        print(f"SUCCESS: 管理コード {item_manage_code} の出品データを作成しました。")
+    except Exception as error:
+        print(f"ERROR: 処理中にエラーが発生しました: {error}")
+        # Keep the description object untouched and signal failure so the event can retry.
+        raise
+    finally:
+        if processing_lock is not None:
+            try:
+                processing_lock.delete()
+            except Exception as error:
+                print(f"WARNING: 処理ロックの削除に失敗しました: {error}")
