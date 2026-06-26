@@ -1,6 +1,9 @@
 """Cloud Storage event handler for Mercari Shops and Yahoo Auctions listing data."""
 
+import json
 import os
+import re
+from dataclasses import dataclass
 
 import functions_framework
 import google.auth
@@ -9,7 +12,13 @@ import gspread
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud import secretmanager, storage
 
-from listing_data import build_mercari_row, build_yahoo_row, collect_sorted_image_urls
+from listing_data import (
+    MERCARI_COLUMN_COUNT,
+    YAHOO_COLUMN_COUNT,
+    build_mercari_row,
+    build_yahoo_row,
+    collect_sorted_image_urls,
+)
 
 # Deployment settings. Values are intentionally not committed to this repository.
 PROJECT_ID = ""
@@ -24,6 +33,50 @@ MODEL_NAME = "gemini-2.5-flash-lite"
 DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSED_FILE_NAME = "_processed.txt"
 PROCESSING_LOCK_FILE_NAME = "_processing.lock"
+MERCARI_APPEND_TABLE_RANGE = "A1:BU"
+YAHOO_APPEND_TABLE_RANGE = "A1:DJ"
+JSON_OUTPUT_INSTRUCTION = """
+
+出力は必ず次のJSON形式だけにしてください。
+Markdownコードフェンスや説明文は付けないでください。
+
+{
+  "title": "商品タイトル",
+  "description": "商品説明本文"
+}
+
+titleは「状態、ブランド、アイテム名、素材、色、柄、サイズ」の順で、値がない項目は省略してください。
+titleには「タイトル」「商品名」「説明文」などの見出しを含めず、同じ単語を重複させず、各プラットフォームの上限文字数を超えないようにしてください。
+descriptionには商品説明本文だけを入れ、「タイトル：」「商品名：」「説明文：」などの見出しを含めないでください。
+"""
+JSON_CODE_FENCE_PATTERN = re.compile(
+    r"^\s*```(?:json)?\s*(?P<body>.*?)\s*```\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+DESCRIPTION_HEADING_PATTERN = re.compile(
+    r"(?m)^\s*(?:タイトル|商品名|説明文)\s*[:：]\s*"
+)
+TITLE_HEADING_PATTERN = re.compile(
+    r"(?m)^\s*(?:タイトル|商品名)\s*[:：]\s*(?P<title>.+?)\s*$"
+)
+TITLE_VALUE_PATTERN = re.compile(
+    r"(?:^|\n)\s*(?:タイトル|商品名)\s*[:：]\s*(?P<title>.*?)(?=\s*説明文\s*[:：]|\r?\n|$)",
+    re.DOTALL,
+)
+DESCRIPTION_VALUE_PATTERN = re.compile(
+    r"説明文\s*[:：]\s*(?P<description>.*)$",
+    re.DOTALL,
+)
+
+
+class InputValidationError(ValueError):
+    """Raised when generated listing content cannot be safely used."""
+
+
+@dataclass(frozen=True)
+class GeneratedListingContent:
+    title: str
+    description: str
 
 
 def get_api_key() -> str:
@@ -123,18 +176,141 @@ def mark_description_as_processed(
     )
 
 
-def generate_mercari_description(yahoo_description: str) -> str:
-    """Generate the platform-specific Mercari Shops description."""
-    prompt = f"{get_prompt_from_gcs()}\n\n【商品情報】\n{yahoo_description}\n"
-    return model.generate_content(prompt).text
+def strip_json_code_fence(text: str) -> str:
+    match = JSON_CODE_FENCE_PATTERN.match(text)
+    if match:
+        return match.group("body").strip()
+    return text.strip()
+
+
+def clean_title(title: str) -> str:
+    cleaned = DESCRIPTION_HEADING_PATTERN.sub("", title).strip()
+    words = cleaned.split()
+    unique_words: list[str] = []
+    seen_words: set[str] = set()
+    for word in words:
+        if word in seen_words:
+            continue
+        seen_words.add(word)
+        unique_words.append(word)
+    return " ".join(unique_words) if unique_words else cleaned
+
+
+def clean_description(description: str) -> str:
+    cleaned_lines: list[str] = []
+
+    for line in description.splitlines():
+        if re.match(r"^\s*(?:タイトル|商品名)\s*[:：]", line):
+            continue
+        cleaned_line = re.sub(r"^\s*説明文\s*[:：]\s*", "", line)
+        cleaned_lines.append(cleaned_line.rstrip())
+
+    return "\n".join(cleaned_lines).strip()
+
+
+def validate_generated_listing_content(
+    title: str,
+    description: str,
+) -> GeneratedListingContent:
+    cleaned_title = clean_title(title)
+    cleaned_description = clean_description(description)
+
+    if not cleaned_title:
+        raise InputValidationError("生成AIの商品タイトルが空です。")
+    if not cleaned_description:
+        raise InputValidationError("生成AIの商品説明本文が空です。")
+
+    return GeneratedListingContent(
+        title=cleaned_title,
+        description=cleaned_description,
+    )
+
+
+def parse_json_generated_content(raw_text: str) -> GeneratedListingContent:
+    json_text = strip_json_code_fence(raw_text)
+
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError:
+        start = json_text.find("{")
+        end = json_text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(json_text[start : end + 1])
+
+    if not isinstance(parsed, dict):
+        raise ValueError("生成AIのJSONがオブジェクトではありません。")
+
+    return validate_generated_listing_content(
+        str(parsed.get("title", "")),
+        str(parsed.get("description", "")),
+    )
+
+
+def parse_legacy_generated_content(raw_text: str) -> GeneratedListingContent:
+    title_match = TITLE_VALUE_PATTERN.search(raw_text)
+    description_match = DESCRIPTION_VALUE_PATTERN.search(raw_text)
+
+    title = title_match.group("title") if title_match else ""
+    if description_match:
+        description = description_match.group("description")
+    else:
+        description = TITLE_HEADING_PATTERN.sub("", raw_text, count=1)
+
+    return validate_generated_listing_content(title, description)
+
+
+def parse_generated_listing_content(raw_text: str) -> GeneratedListingContent:
+    if not raw_text.strip():
+        raise InputValidationError("生成AIから空の商品情報が返されました。")
+
+    try:
+        return parse_json_generated_content(raw_text)
+    except InputValidationError:
+        raise
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return parse_legacy_generated_content(raw_text)
+
+
+def generate_mercari_description(yahoo_description: str) -> GeneratedListingContent:
+    """Generate the platform-specific title and description for listings."""
+    prompt = (
+        f"{get_prompt_from_gcs()}\n\n"
+        f"{JSON_OUTPUT_INSTRUCTION}\n\n"
+        f"【商品情報】\n{yahoo_description}\n"
+    )
+    response_text = model.generate_content(prompt).text
+    return parse_generated_listing_content(response_text)
+
+
+def validate_output_row_lengths(mercari_row: list[str], yahoo_row: list[str]) -> None:
+    if len(mercari_row) != MERCARI_COLUMN_COUNT:
+        raise ValueError(
+            f"Mercari行は{MERCARI_COLUMN_COUNT}列である必要があります: "
+            f"{len(mercari_row)}列"
+        )
+    if len(yahoo_row) != YAHOO_COLUMN_COUNT:
+        raise ValueError(
+            f"Yahoo行は{YAHOO_COLUMN_COUNT}列である必要があります: "
+            f"{len(yahoo_row)}列"
+        )
 
 
 def append_listing_rows(mercari_row: list[str], yahoo_row: list[str]) -> None:
     """Append the completed rows to their respective worksheets."""
+    validate_output_row_lengths(mercari_row, yahoo_row)
     mercari_sheet, yahoo_sheet = get_worksheets()
-    mercari_sheet.append_row(mercari_row)
+    mercari_sheet.append_row(
+        mercari_row,
+        value_input_option="RAW",
+        table_range=MERCARI_APPEND_TABLE_RANGE,
+    )
     print(f"SUCCESS: メルカリ用シート({SHEET_NAME_MERCARI})に出力しました。")
-    yahoo_sheet.append_row(yahoo_row)
+    yahoo_sheet.append_row(
+        yahoo_row,
+        value_input_option="RAW",
+        table_range=YAHOO_APPEND_TABLE_RANGE,
+    )
     print(f"SUCCESS: ヤフオク用シート({SHEET_NAME_YAHOO})に出力しました。")
 
 
@@ -185,16 +361,18 @@ def generate_dual_listing(cloud_event):
             storage_client.list_blobs(bucket_name, prefix=f"{folder_path}/"),
             bucket_name,
         )
-        mercari_description = generate_mercari_description(yahoo_description)
+        generated_content = generate_mercari_description(yahoo_description)
         mercari_row = build_mercari_row(
             image_urls=image_urls,
             item_manage_code=item_manage_code,
-            description=mercari_description,
+            title=generated_content.title,
+            description=generated_content.description,
         )
         yahoo_row = build_yahoo_row(
             image_urls=image_urls,
             item_manage_code=item_manage_code,
-            description=yahoo_description,
+            title=generated_content.title,
+            description=generated_content.description,
         )
         append_listing_rows(mercari_row, yahoo_row)
         mark_description_as_processed(

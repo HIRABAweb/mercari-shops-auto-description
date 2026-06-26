@@ -85,14 +85,14 @@ def collect_sorted_image_urls(blobs: Iterable, bucket_name: str) -> list[str]:
 
 
 def build_mercari_row(
-    image_urls: list[str], item_manage_code: str, description: str
+    image_urls: list[str], item_manage_code: str, description: str, title: str = "【要修正】商品名"
 ) -> list[str]:
-    """Build the unchanged 73-column Mercari Shops import row."""
+    """Build the 73-column Mercari Shops import row."""
     row = [""] * MERCARI_COLUMN_COUNT
     for index, image_url in enumerate(image_urls[:MERCARI_IMAGE_LIMIT]):
         row[MERCARI_IMAGE_START + index] = image_url
 
-    row[MERCARI_TITLE] = "【要修正】商品名"
+    row[MERCARI_TITLE] = title
     row[MERCARI_DESCRIPTION] = description
     row[MERCARI_SKU_TYPE] = "one size"
     row[MERCARI_STOCK] = "1"
@@ -110,12 +110,12 @@ def build_mercari_row(
 
 
 def build_yahoo_row(
-    image_urls: list[str], item_manage_code: str, description: str
+    image_urls: list[str], item_manage_code: str, description: str, title: str = "【要修正】商品名"
 ) -> list[str]:
-    """Build the unchanged 114-column Yahoo Auctions / AuctionTown import row."""
+    """Build the 114-column Yahoo Auctions / AuctionTown import row."""
     row = [""] * YAHOO_COLUMN_COUNT
     row[YAHOO_CATEGORY_ID] = "【要修正】カテゴリID"
-    row[YAHOO_TITLE] = f"【要修正】商品名 (管理コード: {item_manage_code})"
+    row[YAHOO_TITLE] = f"{title} (管理コード: {item_manage_code})"
     row[YAHOO_DESCRIPTION] = description.replace("\n", "<br>")
     row[YAHOO_START_PRICE] = "49999"
     row[YAHOO_BUY_NOW_PRICE] = "50000"
