@@ -1,6 +1,7 @@
 """Tests for image-to-description safeguards without cloud credentials."""
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -27,7 +28,8 @@ def load_module():
     functions_framework = types.ModuleType("functions_framework")
     functions_framework.cloud_event = lambda function: function
     vertexai = types.ModuleType("vertexai")
-    vertexai.init = lambda **kwargs: None
+    vertexai.init_calls = []
+    vertexai.init = lambda **kwargs: vertexai.init_calls.append(kwargs)
     generative_models = types.ModuleType("vertexai.generative_models")
     generative_models.GenerativeModel = lambda name: object()
     generative_models.Part = FakePart
@@ -119,6 +121,63 @@ class ImageDescriptionTest(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
 
+    def test_missing_project_env_fails_before_vertex_initialization(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 PROJECT_ID が未設定",
+            ):
+                self.module.get_model()
+
+        self.assertEqual(self.module.vertexai.init_calls, [])
+
+    def test_missing_vertex_location_env_fails_before_vertex_initialization(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 VERTEX_LOCATION が未設定",
+            ):
+                self.module.get_model()
+
+        self.assertEqual(self.module.vertexai.init_calls, [])
+
+    def test_missing_vertex_model_env_fails_before_vertex_initialization(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+                "VERTEX_LOCATION": "asia-northeast1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 VERTEX_MODEL が未設定",
+            ):
+                self.module.get_model()
+
+        self.assertEqual(self.module.vertexai.init_calls, [])
+
+    def test_missing_prompt_env_fails_clearly(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 PROMPT_BUCKET_NAME が未設定",
+            ):
+                self.module.get_prompt()
+
     def test_missing_measurements_are_marked_for_human_review(self):
         description = self.module.add_measurement_review_marker("商品説明", False)
 
@@ -141,10 +200,18 @@ class ImageDescriptionTest(unittest.TestCase):
         prompt_attempts = iter([None, "商品説明を作成してください。"])
         self.module.load_prompt_from_gcs = lambda bucket, filename: next(prompt_attempts)
 
-        with self.assertRaisesRegex(RuntimeError, "プロンプトをGCSから読み込めません"):
-            self.module.get_prompt()
+        with patch.dict(
+            os.environ,
+            {
+                "PROMPT_BUCKET_NAME": "prompt-bucket",
+                "PROMPT_FILE_NAME": "image-prompt.txt",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "プロンプトをGCSから読み込めません"):
+                self.module.get_prompt()
 
-        self.assertEqual(self.module.get_prompt(), "商品説明を作成してください。")
+            self.assertEqual(self.module.get_prompt(), "商品説明を作成してください。")
 
     def test_images_are_number_sorted_and_limited_to_twenty(self):
         blobs = [

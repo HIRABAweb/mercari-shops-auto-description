@@ -42,11 +42,6 @@ from title_builder import build_title, ensure_size_in_description
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 
-PROJECT_ID = ""
-SECRET_NAME = ""
-PROMPT_BUCKET_NAME = ""
-PROMPT_FILE_NAME = ".txt"
-MODEL_NAME = "gemini-2.5-flash-lite"
 BRAND_MASTER_FILE_NAME = "masters/brand_master.csv"
 CATEGORY_MASTER_FILE_NAME = "masters/category_master_updated.csv"
 LOCAL_MERCARI_RESOURCE_DIR = Path(__file__).resolve().parent / "resources" / "mercari"
@@ -57,6 +52,21 @@ DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSED_FILE_NAME = "_processed.txt"
 PROCESSING_LOCK_FILE_NAME = "_processing.lock"
 EXPORT_ROOT = "exports"
+_MODEL = None
+_API_KEY: str | None = None
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required deployment settings are missing."""
+
+
+def get_required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ConfigurationError(
+            f"必須環境変数 {name} が未設定です。Cloud Run Functions の環境変数に設定してください。"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -81,26 +91,44 @@ class ExportResult:
 
 def get_api_key() -> str:
     """Read the Gemini API key from Secret Manager."""
+    global _API_KEY
+    if _API_KEY is not None:
+        return _API_KEY
+
+    project_id = get_required_env("PROJECT_ID")
+    secret_name = get_required_env("SECRET_NAME")
     try:
         secret_client = secretmanager.SecretManagerServiceClient()
-        secret_version = f"projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
+        secret_version = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
         response = secret_client.access_secret_version(request={"name": secret_version})
-        return response.payload.data.decode("UTF-8")
+        _API_KEY = response.payload.data.decode("UTF-8")
+        return _API_KEY
     except Exception:
         LOGGER.exception("APIキーの取得に失敗しました。")
         raise
 
 
+def get_model():
+    """Create the Gemini client lazily so imports do not require cloud settings."""
+    global _MODEL
+    if _MODEL is None:
+        genai.configure(api_key=get_api_key())
+        _MODEL = genai.GenerativeModel(get_required_env("GEMINI_MODEL"))
+    return _MODEL
+
+
 def get_prompt_from_gcs() -> str:
     """Load the listing metadata prompt, with the existing fallback."""
+    prompt_bucket_name = get_required_env("PROMPT_BUCKET_NAME")
+    prompt_file_name = get_required_env("PROMPT_FILE_NAME")
     try:
-        prompt_blob = storage_client.bucket(PROMPT_BUCKET_NAME).blob(PROMPT_FILE_NAME)
+        prompt_blob = storage_client.bucket(prompt_bucket_name).blob(prompt_file_name)
         return prompt_blob.download_as_text()
     except Exception as error:
         LOGGER.warning(
             "プロンプトの読み込みに失敗したためデフォルトを使用します: bucket=%s file=%s error=%s",
-            PROMPT_BUCKET_NAME,
-            PROMPT_FILE_NAME,
+            prompt_bucket_name,
+            prompt_file_name,
             error,
         )
         return "商品の情報を整理し、出品用の商品説明本文と属性をJSONで作成してください。"
@@ -214,7 +242,7 @@ def load_category_records(bucket) -> list[CategoryRecord]:
 def generate_product_attributes(source_description: str) -> ProductAttributes:
     """Generate structured attributes. Gemini never decides final IDs or title."""
     prompt = build_generation_prompt(get_prompt_from_gcs(), source_description)
-    response_text = model.generate_content(prompt).text
+    response_text = get_model().generate_content(prompt).text
     return parse_product_attributes(response_text)
 
 
@@ -296,8 +324,6 @@ def upload_export_artifacts(
     return outputs
 
 
-genai.configure(api_key=get_api_key())
-model = genai.GenerativeModel(MODEL_NAME)
 storage_client = storage.Client()
 
 

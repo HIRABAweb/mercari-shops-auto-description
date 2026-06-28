@@ -65,6 +65,105 @@ flowchart TD
 - メルカリShops用CSVとYahooオークション用CSVを列名ベースで生成
 - 処理結果を `result.json` に保存
 
+## Google Cloud Run Functionsへのデプロイ
+
+このリポジトリには実際のGoogle CloudプロジェクトID、バケット名、シークレット名、APIキー本体は含めません。環境ごとに異なる値はCloud Run Functionsの環境変数として設定します。
+
+APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはSecret Managerのシークレット名だけを渡します。
+
+### 必須環境変数
+
+#### image-to-description
+
+| 環境変数 | 用途 | 例 |
+| --- | --- | --- |
+| `PROJECT_ID` | Vertex AIを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
+| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
+| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/image-description.txt` |
+| `VERTEX_LOCATION` | Vertex AIのリージョン | `asia-northeast1` |
+| `VERTEX_MODEL` | Vertex AI Geminiモデル名 | `gemini-2.5-flash` |
+
+#### yahuoku-to-mercarishops
+
+| 環境変数 | 用途 | 例 |
+| --- | --- | --- |
+| `PROJECT_ID` | Secret Managerを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
+| `SECRET_NAME` | Gemini APIキーを保存したSecret Managerのシークレット名 | `gemini-api-key` |
+| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
+| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
+| `GEMINI_MODEL` | Gemini APIモデル名 | `gemini-2.5-flash-lite` |
+
+ローカル確認用のサンプルは `.env.example` にあります。実際の値を書く `.env` はGit管理しません。
+
+### Secret Manager
+
+Gemini APIキーはSecret Managerへ保存します。
+
+```powershell
+gcloud secrets create gemini-api-key --replication-policy="automatic"
+gcloud secrets versions add gemini-api-key --data-file="path/to/api-key.txt"
+```
+
+`api-key.txt` や実際のAPIキー文字列はGitHubへコミットしません。
+
+### デプロイコマンド例
+
+`YOUR_REGION`、`YOUR_PRODUCT_BUCKET`、`YOUR_PROMPT_BUCKET`、`YOUR_PROJECT_ID` は自分の環境の値に置き換えてください。
+
+#### image-to-description
+
+- source directory: `image-to-description`
+- entry point: `generate_description_from_trigger`
+- trigger bucket: 商品画像と `_SUCCESS.txt` をアップロードするGCSバケット
+
+```powershell
+gcloud functions deploy image-to-description `
+  --gen2 `
+  --runtime=python312 `
+  --region=YOUR_REGION `
+  --source=image-to-description `
+  --entry-point=generate_description_from_trigger `
+  --trigger-bucket=YOUR_PRODUCT_BUCKET `
+  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/image-description.txt,VERTEX_LOCATION=asia-northeast1,VERTEX_MODEL=gemini-2.5-flash
+```
+
+#### yahuoku-to-mercarishops
+
+- source directory: `yahuoku-to-mercarishops`
+- entry point: `generate_dual_listing`
+- trigger bucket: `image-to-description` が `_description.txt` を保存するGCSバケット
+
+```powershell
+gcloud functions deploy yahuoku-to-mercarishops `
+  --gen2 `
+  --runtime=python312 `
+  --region=YOUR_REGION `
+  --source=yahuoku-to-mercarishops `
+  --entry-point=generate_dual_listing `
+  --trigger-bucket=YOUR_PRODUCT_BUCKET `
+  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,GEMINI_MODEL=gemini-2.5-flash-lite
+```
+
+### Google Cloud Consoleで環境変数を設定する手順
+
+1. Google Cloud Consoleで対象のCloud Run Functionsを開く
+2. `編集` を選択する
+3. `ランタイム、ビルド、接続、セキュリティの設定` を開く
+4. `ランタイム環境変数` に必要な環境変数を追加する
+5. `デプロイ` を選択する
+
+Secret Managerに保存したAPIキー本体は環境変数へ直接入力しません。`SECRET_NAME` にはシークレット名だけを入力します。
+
+### 必要なIAM
+
+Cloud Run Functionsの実行サービスアカウントには、少なくとも次の権限が必要です。
+
+- 商品画像・トリガーファイル・出力CSVを扱うGCSバケットへの読み書き権限
+- プロンプトを置くGCSバケットへの読み取り権限
+- `image-to-description` 用の Vertex AI 利用権限
+- `yahuoku-to-mercarishops` 用の Secret Manager Secret Accessor 権限
+- Cloud Storageトリガーを受けるためのEventarc関連権限
+
 ## AI出力仕様
 
 `yahuoku-to-mercarishops` では、AIに完成タイトルやIDを作らせません。AIは商品属性だけをJSONで返します。
@@ -199,11 +298,12 @@ M相当
 {
   "success": true,
   "product_code": "sample-item",
-  "title": "美品 D&G ダウンジャケット ナイロン ブラック 46",
+  "batch_id": "sample-item",
   "category_id": "456",
   "brand_id": "123",
   "review_required": false,
-  "output_files": {
+  "processing_time": 1.235,
+  "outputs": {
     "mercari_csv": "exports/sample-item/mercari.csv",
     "yahoo_csv": "exports/sample-item/yahoo.csv",
     "review_required_csv": "exports/sample-item/review_required.csv",

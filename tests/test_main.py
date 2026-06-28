@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import types
 import unittest
@@ -21,13 +22,17 @@ class FakePreconditionFailed(Exception):
 
 
 class FakeSecretClient:
+    requests = []
+
     def access_secret_version(self, request):
+        self.requests.append(request)
         return types.SimpleNamespace(
             payload=types.SimpleNamespace(data=b"test-api-key")
         )
 
 
 def load_main_module():
+    FakeSecretClient.requests = []
     functions_framework = types.ModuleType("functions_framework")
     functions_framework.cloud_event = lambda function: function
 
@@ -134,6 +139,60 @@ class FakeStorageClient:
 class MainCsvExportTest(unittest.TestCase):
     def setUp(self):
         self.module = load_main_module()
+
+    def test_missing_required_env_fails_clearly(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 PROJECT_ID が未設定",
+            ):
+                self.module.get_api_key()
+
+    def test_secret_manager_path_uses_required_env_values(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+                "SECRET_NAME": "gemini-api-key",
+            },
+            clear=True,
+        ):
+            self.assertEqual(self.module.get_api_key(), "test-api-key")
+
+        self.assertEqual(
+            FakeSecretClient.requests[0]["name"],
+            "projects/sample-project/secrets/gemini-api-key/versions/latest",
+        )
+
+    def test_missing_prompt_env_fails_clearly(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+                "SECRET_NAME": "gemini-api-key",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 PROMPT_BUCKET_NAME が未設定",
+            ):
+                self.module.get_prompt_from_gcs()
+
+    def test_missing_model_env_fails_clearly(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+                "SECRET_NAME": "gemini-api-key",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 GEMINI_MODEL が未設定",
+            ):
+                self.module.get_model()
 
     def test_replaces_only_the_filename_suffix(self):
         self.assertEqual(
