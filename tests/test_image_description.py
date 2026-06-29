@@ -196,6 +196,14 @@ class ImageDescriptionTest(unittest.TestCase):
         self.assertEqual(measurement_info, "")
         self.assertFalse(measurement_available)
 
+    def test_success_trigger_file_name_must_be_exact_under_product_folder(self):
+        self.assertEqual(self.module.SUCCESS_FILE_NAME, "_SUCCESS.txt")
+        self.assertTrue(self.module.is_success_file("A0001/_SUCCESS.txt"))
+        self.assertFalse(self.module.is_success_file("_SUCCESS.txt"))
+        self.assertFalse(self.module.is_success_file("A0001/SUCCESS.txt"))
+        self.assertFalse(self.module.is_success_file("A0001/success.txt"))
+        self.assertFalse(self.module.is_success_file("A0001/_success.txt"))
+
     def test_prompt_loading_retries_after_a_transient_failure(self):
         prompt_attempts = iter([None, "商品説明を作成してください。"])
         self.module.load_prompt_from_gcs = lambda bucket, filename: next(prompt_attempts)

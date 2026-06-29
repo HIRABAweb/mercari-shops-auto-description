@@ -203,6 +203,14 @@ class MainCsvExportTest(unittest.TestCase):
             "folder_description.txt/item_processed.txt",
         )
 
+    def test_csv_export_trigger_file_name_must_end_with_description_txt(self):
+        self.assertEqual(self.module.DESCRIPTION_FILE_NAME, "_description.txt")
+        self.assertTrue(self.module.is_description_file("A0001/_description.txt"))
+        self.assertTrue(self.module.is_description_file("A0001/item_description.txt"))
+        self.assertFalse(self.module.is_description_file("A0001/description.txt"))
+        self.assertFalse(self.module.is_description_file("A0001/_DESCRIPTION.txt"))
+        self.assertFalse(self.module.is_description_file("A0001/_success.txt"))
+
     def test_export_context_uses_product_folder_as_batch_id(self):
         context = self.module.build_export_context("A0001/item_description.txt")
 

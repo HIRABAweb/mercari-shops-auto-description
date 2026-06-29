@@ -6,7 +6,6 @@ import csv
 import io
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 from ai_service import ProductAttributes
 from brand_mapper import BrandMatch
@@ -204,12 +203,7 @@ def empty_row(headers: list[str]) -> dict[str, str]:
     return {header: "" for header in headers}
 
 
-def image_file_name(image_ref: str) -> str:
-    path = urlparse(image_ref).path or image_ref
-    return unquote(path.rstrip("/").split("/")[-1])
-
-
-def build_mercari_row_by_name(
+def build_mercari_row(
     *,
     image_urls: list[str],
     product_code: str,
@@ -222,7 +216,7 @@ def build_mercari_row_by_name(
 ) -> dict[str, str]:
     row = empty_row(MERCARI_HEADERS)
     for index, image_url in enumerate(image_urls[:MERCARI_IMAGE_LIMIT], start=1):
-        row[f"商品画像名_{index}"] = image_file_name(image_url)
+        row[f"商品画像名_{index}"] = image_url
     row["商品名"] = title
     row["商品説明"] = description
     row["SKU1_種類"] = size or "one size"
@@ -325,7 +319,7 @@ def build_export_rows(
     defaults: ListingDefaults = ListingDefaults(),
 ) -> ExportRows:
     return ExportRows(
-        mercari_row=build_mercari_row_by_name(
+        mercari_row=build_mercari_row(
             image_urls=image_urls,
             product_code=product_code,
             title=title,
