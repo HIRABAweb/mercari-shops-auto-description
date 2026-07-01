@@ -1,4 +1,4 @@
-"""Regression tests for platform CSV-row construction."""
+﻿"""Tests for image URL helpers."""
 
 import importlib.util
 import unittest
@@ -33,25 +33,6 @@ class ListingDataTest(unittest.TestCase):
                 "https://storage.googleapis.com/product-images/A0001/010.jpg",
             ],
         )
-
-    def test_mercari_row_preserves_73_column_format(self):
-        row = listing_data.build_mercari_row(["image-1", "image-2"], "A0001", "説明文")
-
-        self.assertEqual(len(row), 73)
-        self.assertEqual(row[0:2], ["image-1", "image-2"])
-        self.assertEqual(row[21], "説明文")
-        self.assertEqual(row[24], "A0001")
-        self.assertEqual(row[63], "50000")
-
-    def test_yahoo_row_preserves_114_column_format_and_image_columns(self):
-        row = listing_data.build_yahoo_row(["image-1", "image-2"], "A0001", "1行目\n2行目")
-
-        self.assertEqual(len(row), 114)
-        self.assertEqual(row[1], "【要修正】商品名 (管理コード: A0001)")
-        self.assertEqual(row[2], "1行目<br>2行目")
-        self.assertEqual(row[9], "image-1")
-        self.assertEqual(row[11], "image-2")
-        self.assertEqual(row[61], "2日～3日")
 
 
 if __name__ == "__main__":

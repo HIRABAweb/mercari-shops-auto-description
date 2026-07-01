@@ -9,13 +9,6 @@ from google.api_core.exceptions import PreconditionFailed
 from google.cloud import storage
 from vertexai.generative_models import GenerativeModel, Part
 
-# Deployment settings. Configure these values for each Cloud Run function deployment.
-PROJECT_ID = ""
-LOCATION = "asia-northeast1"
-PROMPT_BUCKET_NAME = "t"
-PROMPT_FILE_NAME = ""
-MODEL_NAME = "gemini-2.5-flash"
-
 SUCCESS_FILE_NAME = "_SUCCESS.txt"
 DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSING_LOCK_FILE_NAME = "_description_processing.lock"
@@ -25,9 +18,37 @@ MAX_IMAGE_TOTAL_BYTES = 100 * 1000 * 1000
 MISSING_MEASUREMENT_MARKER = "【要確認：採寸情報なし】"
 
 
-vertexai.init(project=PROJECT_ID, location=LOCATION)
 storage_client = storage.Client()
-model = GenerativeModel(MODEL_NAME)
+model = None
+_VERTEX_INITIALIZED = False
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required deployment settings are missing."""
+
+
+def get_required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ConfigurationError(
+            f"必須環境変数 {name} が未設定です。Cloud Run Functions の環境変数に設定してください。"
+        )
+    return value
+
+
+def get_model():
+    """Initialize Vertex AI lazily so module import does not require env vars."""
+    global _VERTEX_INITIALIZED, model
+    if model is not None:
+        return model
+    project_id = get_required_env("PROJECT_ID")
+    location = get_required_env("VERTEX_LOCATION")
+    model_name = get_required_env("VERTEX_MODEL")
+    if not _VERTEX_INITIALIZED:
+        vertexai.init(project=project_id, location=location)
+        _VERTEX_INITIALIZED = True
+    model = GenerativeModel(model_name)
+    return model
 
 
 def load_prompt_from_gcs(bucket_name: str, file_name: str) -> str | None:
@@ -51,8 +72,10 @@ PROMPT_TEXT: str | None = None
 def get_prompt() -> str:
     """Return a cached prompt, retrying GCS loading after a transient failure."""
     global PROMPT_TEXT
+    prompt_bucket_name = get_required_env("PROMPT_BUCKET_NAME")
+    prompt_file_name = get_required_env("PROMPT_FILE_NAME")
     if PROMPT_TEXT is None:
-        PROMPT_TEXT = load_prompt_from_gcs(PROMPT_BUCKET_NAME, PROMPT_FILE_NAME)
+        PROMPT_TEXT = load_prompt_from_gcs(prompt_bucket_name, prompt_file_name)
     if PROMPT_TEXT is None:
         raise RuntimeError("プロンプトをGCSから読み込めませんでした。")
     return PROMPT_TEXT
@@ -183,7 +206,7 @@ def generate_description_from_trigger(cloud_event):
 
         print(f"INFO: {len(image_parts)}枚の画像を使用して商品説明文を生成します。")
         description_text = add_measurement_review_marker(
-            model.generate_content([prompt, *image_parts]).text,
+            get_model().generate_content([prompt, *image_parts]).text,
             measurement_available,
         )
         output_blob.upload_from_string(

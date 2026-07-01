@@ -1,536 +1,395 @@
-生成AIを活用したEC出品データ生成MVP
+# Mercari Shops / Yahooオークション 自動出品CSV生成ツール
 
-リユース商品の画像と採寸情報から商品説明文を生成し、メルカリShopsおよびヤフオク向けの出品データを作成する、Google Cloud上のイベント駆動型MVPです。
+商品画像と採寸・状態メモから、メルカリShops用CSVとYahooオークション用CSVを生成するGoogle Cloud Functions構成のツールです。
 
-商品ごとの画像と採寸情報をGoogle Cloud Storageへアップロードすると、生成AIによる商品説明文の作成、画像URLの整列、販売プラットフォーム別データの生成、Googleスプレッドシートへの出力までを自動で実行します。
+最終目標は、外注スタッフが商品フォルダへ以下だけをアップロードすれば出品用CSVが生成される状態です。
 
-«本システムは、AIの生成結果をそのまま公開する完全自動出品システムではありません。
-最終的に人が内容を確認・修正するHuman-in-the-loop方式を採用しています。»
+- 商品画像
+- `_SUCCESS.txt`
 
----
+スプレッドシートは中間管理には使わず、最終成果物はCloud Storage上のCSVとJSONです。
 
-開発背景
+## 出力物
 
-個人でリユース事業を運営する中で、商品数の増加に伴い、以下の出品準備業務がボトルネックになっていました。
+`yahuoku-to-mercarishops` は `_description.txt` を入力として処理し、次の構成で成果物を保存します。
 
-- 商品画像の確認と整理
-- 採寸情報の転記
-- 商品説明文の作成
-- 販売先ごとの入力形式への変換
-- 商品画像URLの登録
-- スプレッドシートへの転記
-- メルカリShopsとヤフオクへの重複入力
+```text
+exports/
+  {batch_id}/
+    mercari.csv
+    yahoo.csv
+    review_required.csv
+    result.json
+    _DONE.txt
+```
 
-これらの作業を効率化するため、実際の出品業務を基に要件を整理し、Python、Google Cloud、Vertex AI、Gemini APIを利用したMVPを開発しました。
+`_DONE.txt` はCSVとJSONの生成が成功した場合のみ最後に作成されます。
 
----
+## 全体フロー
 
-主な機能
-
-- 商品画像と採寸情報を利用した商品説明文の生成
-- Google Cloud Storageへのファイルアップロードを起点とした自動処理
-- 商品フォルダ名を商品管理コードとして利用
-- 商品画像の公開URL生成
-- 画像ファイル名に含まれる数字による表示順の制御
-- メルカリShops向け73列データの生成
-- ヤフオク・オークタウン向け114列データの生成
-- Googleスプレッドシートへの出品データ追記
-- Secret Managerを利用したAPIキー管理
-- 処理済みファイルへの変更による重複実行の抑止
-- AI生成結果を人が確認・修正するHuman-in-the-loop運用
-
----
-
-システム構成
-
+```mermaid
 flowchart TD
-    A[商品画像をGCSへアップロード] --> B[採寸情報を記載した_SUCCESS.txtをアップロード]
-    B --> C[image-to-descriptionが起動]
-    C --> D[画像と採寸情報をVertex AI Geminiへ送信]
-    D --> E[_description.txtをGCSへ保存]
-    E --> F[yahuoku-to-mercarishopsが起動]
-    F --> G[画像URLを数字順に並び替え]
-    F --> H[メルカリShops用説明文を生成]
-    G --> I[メルカリShops向け73列データを作成]
-    H --> I
-    G --> J[ヤフオク向け114列データを作成]
-    E --> J
-    I --> K[Googleスプレッドシートへ追記]
+    A[商品画像をGCSへアップロード] --> B[_SUCCESS.txtをアップロード]
+    B --> C[image-to-description]
+    C --> D[画像と採寸情報から_description.txtを生成]
+    D --> E[yahuoku-to-mercarishops]
+    E --> F[AI JSONを解析]
+    F --> G[Pythonでタイトルと説明文を整形]
+    G --> H[ブランドマスタとカテゴリマスタを照合]
+    H --> I[mercari.csv / yahoo.csvを生成]
+    H --> J[必要時のみreview_required.csvへ確認項目を出力]
+    I --> K[result.jsonを保存]
     J --> K
-    K --> L[人が内容を確認・修正]
-    L --> M[CSVとして出力・各サービスへ登録]
+    K --> L[_DONE.txtを保存]
+```
 
-本システムは、役割の異なる2つのサービスで構成されています。
+## サービス構成
 
-1. "image-to-description"
+### image-to-description
 
-商品画像と採寸情報から、ヤフオク向けの商品説明文の下書きを生成するサービスです。
+`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と採寸・状態メモをGeminiへ送信し、商品説明生成用の `_description.txt` をCloud Storageへ保存します。
 
-主な処理は以下です。
+### yahuoku-to-mercarishops
 
-1. "_SUCCESS.txt"の作成イベントを検知
-2. "_SUCCESS.txt"から採寸情報と状態メモを読み込み
-3. 同じ商品フォルダ内の画像を取得
-4. Google Cloud Storageに保存したプロンプトを読み込み
-5. Vertex AI Geminiへ画像、採寸情報、プロンプトを送信
-6. 生成した説明文を"_description.txt"として保存
+`_description.txt` のアップロードをトリガーに、出品CSVを生成します。
 
-2. "yahuoku-to-mercarishops"
+主な処理は次の通りです。
 
-生成された説明文と画像URLから、販売プラットフォーム別の出品データを作成するサービスです。
+- 同じ商品フォルダ内の画像URLをファイル名順に取得
+- GeminiからJSON形式の商品属性を取得
+- 商品タイトルをPython側で生成
+- 説明文から `タイトル：` / `商品名：` / `説明文：` などの見出しを除去
+- ブランド名をブランドマスタからブランドIDへ変換
+- カテゴリ情報をカテゴリマスタからカテゴリIDへ変換
+- 低信頼度またはマスタ未一致の項目を `review_required.csv` へ出力
+- メルカリShops用CSVとYahooオークション用CSVを列名ベースで生成
+- 処理結果を `result.json` に保存
 
-主な処理は以下です。
+## Google Cloud Run Functionsへのデプロイ
 
-1. "_description.txt"の作成イベントを検知
-2. "_description.txt"を"_processed.txt"へ変更し、重複実行を抑止
-3. 同じ商品フォルダ内の商品画像URLを取得
-4. 画像ファイル名に含まれる数字を基準にURLを並び替え
-5. Gemini APIを利用してメルカリShops向けの説明文を生成
-6. メルカリShops向け73列データを作成
-7. ヤフオク・オークタウン向け114列データを作成
-8. Googleスプレッドシートへ各データを追記
+このリポジトリには実際のGoogle CloudプロジェクトID、バケット名、シークレット名、APIキー本体は含めません。環境ごとに異なる値はCloud Run Functionsの環境変数として設定します。
 
----
+APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはSecret Managerのシークレット名だけを渡します。
 
-処理フロー
+### 必須環境変数
 
-1. 商品フォルダを作成する
+#### image-to-description
 
-Google Cloud Storageの対象バケット内に、商品ごとのフォルダを作成します。
+| 環境変数 | 用途 | 例 |
+| --- | --- | --- |
+| `PROJECT_ID` | Vertex AIを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
+| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
+| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/image-description.txt` |
+| `VERTEX_LOCATION` | Vertex AIのリージョン | `asia-northeast1` |
+| `VERTEX_MODEL` | Vertex AI Geminiモデル名 | `gemini-2.5-flash` |
 
-フォルダ名は、出力データの商品管理コードとして使用されます。
+#### yahuoku-to-mercarishops
 
-商品管理コード/
+| 環境変数 | 用途 | 例 |
+| --- | --- | --- |
+| `PROJECT_ID` | Secret Managerを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
+| `SECRET_NAME` | Gemini APIキーを保存したSecret Managerのシークレット名 | `gemini-api-key` |
+| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
+| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
+| `GEMINI_MODEL` | Gemini APIモデル名 | `gemini-2.5-flash-lite` |
 
-例：
+ローカル確認用のサンプルは `.env.example` にあります。実際の値を書く `.env` はGit管理しません。
 
-A0001/
+### Secret Manager
 
-2. 商品画像をアップロードする
+Gemini APIキーはSecret Managerへ保存します。
 
-商品フォルダ内に画像をアップロードします。
+```powershell
+gcloud secrets create gemini-api-key --replication-policy="automatic"
+gcloud secrets versions add gemini-api-key --data-file="path/to/api-key.txt"
+```
 
-A0001/
-├── 001.jpg
-├── 002.jpg
-├── 003.jpg
-└── 004.jpg
+`api-key.txt` や実際のAPIキー文字列はGitHubへコミットしません。
 
-対応している画像形式は以下です。
+### デプロイコマンド例
 
-- ".jpg"
-- ".jpeg"
-- ".png"
-- ".webp"
+`YOUR_REGION`、`YOUR_PRODUCT_BUCKET`、`YOUR_PROMPT_BUCKET`、`YOUR_PROJECT_ID` は自分の環境の値に置き換えてください。
 
-3. 画像の表示順を指定する
+#### image-to-description
 
-画像ファイル名に数字を付けることで、出品データ上の画像順を制御します。
+- source directory: `image-to-description`
+- entry point: `generate_description_from_trigger`
+- trigger bucket: 商品画像と `_SUCCESS.txt` をアップロードするGCSバケット
 
-001.jpg
-002.jpg
-003.jpg
-004.jpg
+```powershell
+gcloud functions deploy image-to-description `
+  --gen2 `
+  --runtime=python312 `
+  --region=YOUR_REGION `
+  --source=image-to-description `
+  --entry-point=generate_description_from_trigger `
+  --trigger-bucket=YOUR_PRODUCT_BUCKET `
+  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/image-description.txt,VERTEX_LOCATION=asia-northeast1,VERTEX_MODEL=gemini-2.5-flash
+```
 
-システムはファイル名から最初の数字を抽出し、数字の小さい順に画像URLを並べます。
+#### yahuoku-to-mercarishops
 
-メルカリShops向けには先頭から最大20枚、ヤフオク向けには先頭から最大10枚を出力データへ設定します。
+- source directory: `yahuoku-to-mercarishops`
+- entry point: `generate_dual_listing`
+- trigger bucket: `image-to-description` が `_description.txt` を保存するGCSバケット
 
-意図しない順番になることを避けるため、"1.jpg"、"2.jpg"ではなく、"001.jpg"、"002.jpg"のようなゼロ埋め形式を推奨します。
+```powershell
+gcloud functions deploy yahuoku-to-mercarishops `
+  --gen2 `
+  --runtime=python312 `
+  --region=YOUR_REGION `
+  --source=yahuoku-to-mercarishops `
+  --entry-point=generate_dual_listing `
+  --trigger-bucket=YOUR_PRODUCT_BUCKET `
+  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,GEMINI_MODEL=gemini-2.5-flash-lite
+```
 
-4. "_SUCCESS.txt"を作成する
+### Google Cloud Consoleで環境変数を設定する手順
 
-商品画像のアップロードが完了した後、同じ商品フォルダ内に"_SUCCESS.txt"をアップロードします。
+1. Google Cloud Consoleで対象のCloud Run Functionsを開く
+2. `編集` を選択する
+3. `ランタイム、ビルド、接続、セキュリティの設定` を開く
+4. `ランタイム環境変数` に必要な環境変数を追加する
+5. `デプロイ` を選択する
 
-"_SUCCESS.txt"は、次の2つの役割を持ちます。
+Secret Managerに保存したAPIキー本体は環境変数へ直接入力しません。`SECRET_NAME` にはシークレット名だけを入力します。
 
-- 商品の採寸情報と状態メモを入力する
-- 商品説明文生成処理を開始するトリガーになる
+### 必要なIAM
 
-入力例：
+Cloud Run Functionsの実行サービスアカウントには、少なくとも次の権限が必要です。
 
-肩幅: 43cm
-身幅: 50cm
-袖丈: 61cm
-着丈: 72cm
-状態メモ: 左袖に薄汚れあり
+- 商品画像・トリガーファイル・出力CSVを扱うGCSバケットへの読み書き権限
+- プロンプトを置くGCSバケットへの読み取り権限
+- `image-to-description` 用の Vertex AI 利用権限
+- `yahuoku-to-mercarishops` 用の Secret Manager Secret Accessor 権限
+- Cloud Storageトリガーを受けるためのEventarc関連権限
 
-傷や汚れなどの特記事項がない場合、"状態メモ"の値は空欄にします。
+## AI出力仕様
 
-肩幅: 43cm
-身幅: 50cm
-袖丈: 61cm
-着丈: 72cm
-状態メモ:
+`yahuoku-to-mercarishops` では、AIに完成タイトルやIDを作らせません。AIは商品属性だけをJSONで返します。
 
-商品カテゴリに応じて、採寸項目は変更できます。
+```json
+{
+  "description": "商品説明本文",
+  "brand_name": "D&G",
+  "category_name": "ジャケット",
+  "gender": "メンズ",
+  "item_type": "ダウンジャケット",
+  "material": "ナイロン",
+  "color": "ブラック",
+  "pattern": "無地",
+  "size": "46",
+  "condition": "美品",
+  "confidence": {
+    "brand": 0.9,
+    "category": 0.85
+  }
+}
+```
 
-例：
+Markdownコードフェンス付きJSONにも対応しています。JSON解析に失敗した場合や必須本文が空の場合は、誤ったCSVを出力しないように例外で停止します。
 
-ウエスト: 80cm
-股上: 27cm
-股下: 72cm
-わたり幅: 30cm
-裾幅: 19cm
-状態メモ:
+## タイトル生成
 
-5. 処理が自動実行される
+タイトルはPython側で、次の順序を基本として生成します。
 
-"_SUCCESS.txt"のアップロードを検知すると、以下の処理が順番に実行されます。
+```text
+状態 ブランド アイテム名 素材 色 柄 サイズ
+```
 
-1. 商品画像と採寸情報を取得
-2. Vertex AI Geminiで商品説明文を生成
-3. "_description.txt"を保存
-4. "_description.txt"の保存イベントを検知
-5. メルカリShops向けデータを生成
-6. ヤフオク向けデータを生成
-7. Googleスプレッドシートへ追記
-8. "_description.txt"を"_processed.txt"へ変更
+空の項目は省略し、同じ単語の重複を避けます。`タイトル`、`商品名`、`説明文` などの見出しは含めません。
 
----
+例:
 
-入力データ構成
+```text
+美品 D&G ダウンジャケット ナイロン ブラック 46
+```
 
-処理開始前の商品フォルダは、以下の構成になります。
+## CSV生成方針
 
-商品管理コード/
-├── 001.jpg
-├── 002.jpg
-├── 003.jpg
-└── _SUCCESS.txt
+CSVは列番号ではなく列名ベースで生成します。
 
-例：
+```python
+row["商品名"] = title
+row["商品説明"] = description
+row["ブランドID"] = brand_id
+```
 
-A0001/
-├── 001.jpg
-├── 002.jpg
-├── 003.jpg
-├── 004.jpg
-└── _SUCCESS.txt
+この方針により、旧実装で発生していたスプレッドシート `append_row()` による列ずれを回避します。
 
----
+メルカリShops CSVヘッダーは公式サポートページから取得した `yahuoku-to-mercarishops/resources/mercari/product_import_template_sample.csv` の1行目を利用します。Yahooオークション側は現時点では既存定義を維持しています。
 
-処理後のデータ構成
+### メルカリShopsの商品画像
 
-処理完了後は、商品フォルダ内に"_processed.txt"が作成されます。
+メルカリShops用CSVでは、`商品画像名_1` 〜 `商品画像名_20` にGCS公開画像URLをそのまま出力します。外注スタッフが商品画像をGCSへアップロードしていれば、メルカリShopsへ同じ画像を別途アップロードする必要はありません。
 
-商品管理コード/
-├── 001.jpg
-├── 002.jpg
-├── 003.jpg
-├── _SUCCESS.txt
-└── _processed.txt
+ただし、CSV投入時にメルカリShops側から画像URLへアクセスできる必要があります。非公開バケットやアクセス制限されたURLの場合、メルカリShopsが画像を取得できず商品登録に失敗する可能性があります。
 
-"_processed.txt"には、最初のサービスが生成したヤフオク向け商品説明文が保存されています。
+運用上の注意点:
 
-"_description.txt"は、後続サービスの処理開始時に"_processed.txt"へ変更されます。これにより、同じイベントが重複して実行されることを抑止しています。
+- 画像URLは、少なくともメルカリShopsへのCSV投入と商品登録確認が終わるまでは削除しない
+- 画像ファイル名には日本語・空白・特殊記号を避け、可能なら英数字・ハイフン・アンダースコアを使う
+- 画像順序はファイル名内の数字順で決まるため、`001.jpg`, `002.jpg` のように連番を付ける
+- Yahooオークション用CSVも従来どおり画像URLを出力する
 
----
+### 実機検証済み範囲
 
-商品画像の公開設定
+- メルカリShops: `mercari.csv` のアップロードと下書き保存まで実機検証済みです。
+- Yahooオークション: `yahoo.csv` の生成処理は実装済みで、既存テストで回帰確認しています。
+- Yahooオークション: 実際の出品画面または一括出品ツールへのCSV投入は未検証です。
 
-メルカリShopsのCSV一括登録では、商品画像に直接アクセスできるURLをCSVへ入力できます。
+公開資料やポートフォリオでは、Yahooオークション側は「Yahooオークション向けCSV生成機能」と表現し、「Yahooオークション出品まで実機検証済み」とは表現しないでください。
 
-本システムでは、Google Cloud Storage上の商品画像から、以下の形式のURLを生成します。
+## ブランドマスタ
 
-https://storage.googleapis.com/{bucket-name}/{object-name}
+ブランドIDはAIに生成させず、ブランド名をマスタで照合します。
 
-そのため、出品データに使用する画像は、URLへアクセスした利用者が認証なしで閲覧できる状態にする必要があります。
+想定配置:
 
-現在の運用では、対象バケットまたは対象画像オブジェクトを、匿名ユーザーが読み取り可能な状態に設定しています。
+```text
+masters/brand_master.csv
+```
 
-セキュリティ上の注意
+推奨列:
 
-- 公開する権限は、画像の読み取り権限だけに限定してください
-- 匿名ユーザーへ書き込み権限を付与しないでください
-- APIキー、認証ファイル、プロンプト、スプレッドシートなどを公開バケットに保存しないでください
-- 顧客情報や個人情報を含む画像は公開しないでください
-- 公開用画像と非公開データは、バケットを分離することを推奨します
+```csv
+ブランドID,ブランド名,ブランド名（カナ）,ブランド名（英語）
+123,Dolce&Gabbana,ドルチェアンドガッバーナ,Dolce&Gabbana
+```
 
----
+`aliases` は `|` 区切りです。標準で `D&G`、`Dolce&Gabbana`、`ドルガバ`、`ドルチェ&ガッバーナ` などは同一ブランドとして扱う補助辞書を持っています。
 
-出力データ
+## カテゴリマスタ
 
-メルカリShops向けデータ
+カテゴリIDはAIに生成させず、性別・カテゴリ名・商品種別をマスタで照合します。
 
-メルカリShopsの一括登録用フォーマットを前提に、73列のデータを生成します。
+想定配置:
 
-主な出力項目は以下です。
+```text
+masters/category_master_updated.csv
+```
 
-- 商品画像URL：最大20枚
+推奨列:
+
+```csv
+カテゴリID,カテゴリ名,カテゴリ名（フル）
+456,ダウンジャケット,ファッション > メンズ > ジャケット・アウター > ダウンジャケット
+```
+
+カテゴリ信頼度が低い、またはマスタに一致しない場合は `review_required.csv` へ確認項目を出力します。
+
+## サイズ処理
+
+現時点ではメルカリShopsのネイティブサイズ設定は対象外です。
+
+サイズは次の場所へ反映します。
+
 - 商品名
 - 商品説明
-- SKUの種類
-- 在庫数
-- 商品管理コード
-- ブランドID
-- 販売価格
-- カテゴリID
-- 商品の状態
-- 配送方法
-- 発送元の地域
-- 発送までの日数
-- 公開ステータス
-- 配送料の負担
-
-現時点では、一部の項目に仮の値または確認用の値を設定しています。
-
-ヤフオク・オークタウン向けデータ
-
-ヤフオク・オークタウン向けフォーマットを前提に、114列のデータを生成します。
-
-主な出力項目は以下です。
-
-- カテゴリID
-- 商品タイトル
-- 商品説明
-- 開始価格
-- 即決価格
-- 出品個数
-- 開催期間
-- 終了時間
-- 商品画像URL：最大10枚
-- 発送元地域
-- 送料負担
-- 商品状態
-- 返品可否
-- 入札制限
-- 配送方法
-- 発送までの日数
-
-Googleスプレッドシート
-
-生成したデータは、Googleスプレッドシートの以下のワークシートへ追記します。
-
-- "Mercari_List"
-- "Yahoo_List"
-
-Googleスプレッドシート上で内容を確認・修正した後、CSVとして出力し、各販売サービスへ登録する運用を想定しています。
-
-現時点では、CSVファイルの生成および販売サービスへのアップロード自体は自動化していません。
-
----
-
-手動確認が必要な項目
-
-現在のMVPでは、以下の項目を人が確認・修正する必要があります。
-
-- 商品名
-- 商品カテゴリID
-- ブランドID
-- 販売価格
-- 商品状態
-- 配送方法
-- 発送元地域
-- 発送までの日数
-- AIが生成した商品説明文
-- 画像の内容と表示順
-- 状態メモが説明文に正しく反映されているか
-
-生成AIの出力には誤りや表現の揺れが発生する可能性があるため、AI生成結果をそのまま出品には使用しません。
-
----
-
-技術的に工夫した点
-
-イベント駆動型の処理
-
-画像をアップロードしただけでは処理を開始せず、採寸情報を記載した"_SUCCESS.txt"がアップロードされた時点で処理を開始します。
-
-これにより、画像アップロードの途中で商品説明文生成が開始されることを防いでいます。
-
-サービスの責務を分離
-
-以下の2つの処理を別サービスに分けています。
-
-- 画像解析と商品説明文の生成
-- 販売プラットフォーム別データの生成
-
-これにより、商品説明文生成処理とデータ変換処理を独立して修正しやすい構成にしています。
-
-画像順の制御
-
-Cloud Storageから取得した画像URLをそのまま使用せず、ファイル名から数字を抽出して昇順に並べ替えています。
-
-これにより、撮影者がファイル名を指定することで、出品ページ上の画像表示順を制御できます。
-
-重複実行の抑止
-
-"_description.txt"を取得した直後に"_processed.txt"へ変更することで、同じ商品データが複数回スプレッドシートへ追加されることを抑止しています。
-
-Human-in-the-loop
-
-カテゴリ、ブランド、価格、商品状態など、誤りが売上や顧客対応に影響する項目は、自動確定せず人が最終確認する設計としています。
-
-シークレット管理
-
-Gemini APIの認証情報は、ソースコードへ直接記載せず、Google Secret Managerから取得します。
-
-実際のAPIキー、Google CloudプロジェクトID、スプレッドシートIDなどは、このリポジトリに含めていません。
-
----
-
-使用技術
-
-分類| 技術
-言語| Python
-実行基盤| Google Cloud Run functions / Functions Framework
-ストレージ| Google Cloud Storage
-生成AI| Vertex AI Gemini、Gemini API
-AIモデル| Gemini 2.5 Flash、Gemini 2.5 Flash-Lite
-シークレット管理| Google Secret Manager
-データ出力| Google Sheets API
-Pythonライブラリ| "google-cloud-storage"、"google-cloud-secret-manager"、"gspread"、"functions-framework"
-イベント| Cloud Storageのオブジェクト作成イベント
-
----
-
-ディレクトリ構成
-
-mercari-shops-auto-description/
-├── image-to-description/
-│   ├── main.py
-│   └── requirements.txt
-├── yahuoku-to-mercarishops/
-│   ├── main.py
-│   └── requirements.txt
-├── .gitattributes
-└── README.md
-
-"image-to-description/"
-
-商品画像と採寸情報から、商品説明文を生成するサービスです。
-
-"yahuoku-to-mercarishops/"
-
-生成された商品説明文と画像URLから、メルカリShops向け73列データおよびヤフオク向け114列データを生成するサービスです。
-
----
-
-実行に必要な設定
-
-本システムを別環境で動作させるには、以下のGoogle Cloudリソースと設定が必要です。
-
-Google Cloud
-
-- Google Cloudプロジェクト
-- 商品画像およびトリガーファイル保存用Cloud Storageバケット
-- プロンプト保存用Cloud Storageバケット
-- Cloud Storageイベントを受け取る2つの実行サービス
-- Vertex AI API
-- Secret Manager API
-- Google Sheets API
-- Google Drive API
-- 実行用サービスアカウント
-- 必要なIAM権限
-
-アプリケーション設定
-
-- Google CloudプロジェクトID
-- 利用リージョン
-- 使用するGeminiモデル名
-- プロンプト保存用バケット名
-- プロンプトファイル名
-- Secret Managerのシークレット名
-- GoogleスプレッドシートID
-- 出力先ワークシート名
-- 商品画像保存用バケット名
-
-実際の認証情報、APIキー、プロジェクトID、バケット名、スプレッドシートIDは、セキュリティ上の理由からリポジトリに含めていません。
-
----
-
-必要な権限
-
-実行用サービスアカウントには、構成に応じて以下の権限が必要です。
-
-- Cloud Storageのオブジェクト読み取り
-- Cloud Storageのオブジェクト作成・削除
-- Vertex AIの利用
-- Secret Managerのシークレット参照
-- Googleスプレッドシートの読み書き
-
-また、出力先のGoogleスプレッドシートを、実行用サービスアカウントから編集できる状態にする必要があります。
-
----
-
-現在のステータス
-
-本プロジェクトは、個人で運営していたリユース事業の実業務を基に開発したMVPです。
-
-現在は、以下の処理を実装しています。
-
-- 商品画像と採寸情報の取得
-- 生成AIによる説明文作成
-- 画像URLの数字順ソート
-- メルカリShops向け73列データ作成
-- ヤフオク向け114列データ作成
-- Googleスプレッドシートへの出力
-- 処理済みファイルへの変更による重複実行の抑止
-
-一方で、実際の出品までを完全自動化する段階には至っていません。
-
----
-
-現在の制約
-
-- AIが生成した商品情報の正確性は保証されない
-- 商品名は自動確定していない
-- カテゴリIDとブランドIDは人による設定が必要
-- 販売価格は自動算出していない
-- 商品状態は状態メモから自動判定していない
-- 配送設定の一部に固定値を使用している
-- スプレッドシートからCSVへの自動出力は未実装
-- メルカリShopsおよびヤフオクへの自動アップロードは未実装
-- エラー発生時の自動再実行は未実装
-- 自動テストは未整備
-- 監視、通知、処理状況の可視化は未整備
-- 公開画像URLを利用するため、画像公開範囲の管理が必要
-- 外部サービスのCSV仕様変更に応じた更新が必要
-
----
-
-今後の改善予定
-
-優先度の高い改善項目は以下です。
-
-1. 設定値の環境変数化
-2. コードの関数分割と責務の整理
-3. AI出力のJSON構造化
-4. 入力データと出力データのバリデーション
-5. APIエラー時のリトライ処理
-6. エラー発生時の再実行機能
-7. ログの構造化
-8. 処理状況の可視化
-9. 商品カテゴリとブランドの候補推定
-10. 商品状態の候補推定
-11. CSVファイルの自動生成
-12. ユニットテストの追加
-13. GitHub Actionsによる自動テスト
-14. 実測データによる処理時間と削減効果の検証
-
----
-
-外部仕様
-
-本システムは、以下のメルカリShops公式仕様を参考に実装しています。
-
-メルカリShops
-
-- "商品を一括登録する際のCSVファイルの作り方" (https://support.mercari-shops.com/hc/ja/articles/8859698858649-%E5%95%86%E5%93%81%E3%82%92%E4%B8%80%E6%8B%AC%E7%99%BB%E9%8C%B2%E3%81%99%E3%82%8B%E9%9A%9B%E3%81%AECSV%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB%E3%81%AE%E4%BD%9C%E3%82%8A%E6%96%B9)
-
-メルカリShops向けデータは、公式の一括登録用CSVフォーマットを前提としています。
-
-商品画像については、Google Cloud Storage上の公開URLを商品画像欄へ設定します。商品画像の順番は、画像ファイル名に付与した数字を基準に制御します。
-
-ブランドID、カテゴリID、商品状態、配送設定などは、公式仕様および各種マスタを確認したうえで、出力後に人が設定・修正する運用を前提としています。
-
----
-
-免責事項
-
-本プロジェクトは個人で開発した非公式ツールです。
-
-株式会社メルカリ、メルカリShops、LINEヤフー株式会社、ヤフオク、オークタウン、および各サービス運営会社とは関係ありません。
-
-外部サービスの仕様変更により、出力データが利用できなくなる可能性があります。実際に使用する際は、各サービスの最新の公式仕様を確認してください。
+- メルカリShops CSVの `SKU1_種類`
+- Yahooオークション CSVの `サイズ`
+
+例:
+
+```text
+46
+M相当
+26.5cm
+```
+
+## review_required.csv
+
+通常商品は確認CSVへ出力しません。確認が必要な商品のみ、次の列で出力します。
+
+```csv
+商品管理コード,確認項目,候補1,候補2,理由
+```
+
+主な出力条件:
+
+- ブランドIDが特定できない
+- カテゴリIDが特定できない
+- AIのカテゴリ信頼度がしきい値未満
+
+## result.json
+
+処理結果をJSONで保存します。
+
+```json
+{
+  "success": true,
+  "product_code": "sample-item",
+  "batch_id": "sample-item",
+  "category_id": "456",
+  "brand_id": "123",
+  "review_required": false,
+  "processing_time": 1.235,
+  "outputs": {
+    "mercari_csv": "exports/sample-item/mercari.csv",
+    "yahoo_csv": "exports/sample-item/yahoo.csv",
+    "review_required_csv": "exports/sample-item/review_required.csv",
+    "result_json": "exports/sample-item/result.json",
+    "done": "exports/sample-item/_DONE.txt"
+  }
+}
+```
+
+## ディレクトリ構成
+
+```text
+image-to-description/
+  main.py
+  requirements.txt
+  prompt.txt
+
+yahuoku-to-mercarishops/
+  main.py
+  ai_service.py
+  brand_mapper.py
+  category_mapper.py
+  csv_export.py
+  listing_data.py
+  title_builder.py
+  requirements.txt
+
+tests/
+  test_listing_content_parser.py
+  test_listing_data.py
+  test_csv_export.py
+  test_mappers.py
+  test_main.py
+```
+
+## テスト
+
+```powershell
+python -m pytest -p no:cacheprovider tests
+```
+
+主に次を検証しています。
+
+- 正常なJSONとMarkdownコードフェンス付きJSONの解析
+- 見出し除去と説明文保持
+- 空の説明文の検出
+- Python側タイトル生成
+- ブランド別名解決
+- カテゴリ解決と低信頼度レビュー判定
+- CSVの列名ベース生成
+- 出力成果物パスと `_DONE.txt` 作成順
+- 処理失敗時に元ファイルを処理済みにしないこと
+
+## 必要な主なライブラリ
+
+- functions-framework
+- google-cloud-storage
+- google-cloud-secret-manager
+- google-generativeai
+- google-auth
+
+## 現在の制約
+
+- メルカリShopsの公式テンプレート、ブランドマスタ、カテゴリマスタは同梱済みです。将来テンプレートが更新された場合は再取得が必要です。
+- ブランドIDとカテゴリIDの精度は、`masters/brand_master.csv` と `masters/category_master_updated.csv` の整備品質に依存します。
+- メルカリShopsのネイティブサイズ設定は今回の対象外です。
+- 複数商品を1バッチで集約する構造は将来対応を見据えていますが、現在の実装は1商品フォルダ単位で成果物を生成します。
+- AI生成内容は最終公開前に人が確認する前提です。
