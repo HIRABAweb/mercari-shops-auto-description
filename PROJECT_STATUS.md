@@ -7,9 +7,17 @@
 - Cloud Functions Gen2へ `feature/title-description-separation` の最新コードをデプロイ済み。
 - GCSトリガーでCSV生成が起動することを確認済み。
 - メルカリShops用 `mercari.csv` の `商品画像名_1` 〜 `商品画像名_20` は、GCS公開画像URLをそのまま出力する方式へ変更済み。
-- メルカリShopsへのCSVアップロードと下書き保存まで実機検証済み。
+- メルカリShopsへのCSVアップロード、下書き保存、下書き画面での商品画像表示まで実機検証済み。
 - ローカルテストとCloud Shellテストはいずれも `45 passed`。
 - PR #2はopenで、mergeable true。
+
+### 検証証跡
+
+公開リポジトリ向けに商品名などをマスクした証跡画像を `docs/evidence/` に保存。
+
+- `docs/evidence/mercari-shops-selected.png`: CSVファイル選択状態
+- `docs/evidence/mercari-shops-draft.png`: 下書き画面で商品画像欄が表示された状態
+- `docs/evidence/mercari-shops-complete.png`: CSV登録履歴が登録完了になった状態
 
 ### PR #2のスコープ確認
 
