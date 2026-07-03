@@ -72,23 +72,25 @@ _DONE.txt
 flowchart TD
     A[商品画像をGCSへアップロード] --> B[_SUCCESS.txtをアップロード]
     B --> C[image-to-description]
-    C --> D[画像と採寸情報から_description.txtを生成]
+    C --> D[prompt.txtでヤフオク用_description.txtを生成]
     D --> E[yahuoku-to-mercarishops]
-    E --> F[AI JSONを解析]
-    F --> G[Pythonでタイトルと説明文を整形]
-    G --> H[ブランドマスタとカテゴリマスタを照合]
-    H --> I[mercari.csv / yahoo.csvを生成]
-    H --> J[必要時のみreview_required.csvへ確認項目を出力]
-    I --> K[result.jsonを保存]
+    E --> F[_description.txtからYahooタイトル/HTMLを抽出]
+    F --> G[mercari_prompt.txtでMercariタイトル/本文へ変換]
+    F --> H[属性JSONを補助情報として解析]
+    H --> I[ブランドマスタとカテゴリマスタを照合]
+    I --> J[mercari.csv / yahoo.csvを生成]
+    G --> J[mercari.csv / yahoo.csvを生成]
+    I --> K[必要時のみreview_required.csvへ確認項目を出力]
     J --> K
-    K --> L[_DONE.txtを保存]
+    K --> L[result.jsonを保存]
+    L --> M[_DONE.txtを保存]
 ```
 
 ## サービス構成
 
 ### image-to-description
 
-`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と `product_info.txt` の商品情報・採寸・状態メモをGeminiへ送信し、商品説明生成用の `_description.txt` をCloud Storageへ保存します。
+`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と `product_info.txt` の商品情報・採寸・状態メモをGeminiへ送信し、`prompt.txt` に従ってヤフオク用のタイトルとHTML説明文を含む `_description.txt` をCloud Storageへ保存します。
 
 ### yahuoku-to-mercarishops
 
@@ -97,10 +99,12 @@ flowchart TD
 主な処理は次の通りです。
 
 - 同じ商品フォルダ内の画像URLをファイル名順に取得
-- GeminiからJSON形式の商品属性を取得
-- 商品タイトルをPython側で生成
+- `_description.txt` からヤフオク用タイトルとHTML説明文を抽出
+- Yahooオークション用CSVには `_description.txt` 由来のタイトルとHTML説明文を使用
+- `mercari_prompt.txt` でヤフオク用タイトル・HTML説明文をメルカリShops用タイトル・本文へ変換
+- メルカリShops用CSVには `[TITLE]` と `[BODY]` の変換結果を使用
+- GeminiからJSON形式の商品属性を取得し、ID照合やSKUなどの補助情報にだけ利用
 - 商品説明の誇張表現・断定表現を検出し、必要に応じて `review_required.csv` へ出力
-- 説明文から `タイトル：` / `商品名：` / `説明文：` などの見出しを除去
 - ブランド名をブランドマスタからブランドIDへ変換
 - カテゴリ情報をカテゴリマスタからカテゴリIDへ変換
 - 低信頼度またはマスタ未一致の項目を `review_required.csv` へ出力
@@ -121,7 +125,7 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | --- | --- | --- |
 | `PROJECT_ID` | Vertex AIを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
 | `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
-| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/image-description.txt` |
+| `PROMPT_FILE_NAME` | `prompt.txt` のオブジェクト名 | `prompts/prompt.txt` |
 | `VERTEX_LOCATION` | Vertex AIのリージョン | `asia-northeast1` |
 | `VERTEX_MODEL` | Vertex AI Geminiモデル名 | `gemini-2.5-flash` |
 
@@ -133,6 +137,8 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | `SECRET_NAME` | Gemini APIキーを保存したSecret Managerのシークレット名 | `gemini-api-key` |
 | `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
 | `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
+| `MERCARI_PROMPT_BUCKET_NAME` | メルカリ変換用プロンプトを置くGCSバケット名。未設定時は `PROMPT_BUCKET_NAME` を使用 | `your-prompt-bucket` |
+| `MERCARI_PROMPT_FILE_NAME` | `mercari_prompt.txt` のオブジェクト名 | `prompts/mercari_prompt.txt` |
 | `GEMINI_MODEL` | Gemini APIモデル名 | `gemini-2.5-flash-lite` |
 
 ローカル確認用のサンプルは `.env.example` にあります。実際の値を書く `.env` はGit管理しません。
@@ -166,7 +172,7 @@ gcloud functions deploy image-to-description `
   --source=image-to-description `
   --entry-point=generate_description_from_trigger `
   --trigger-bucket=YOUR_PRODUCT_BUCKET `
-  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/image-description.txt,VERTEX_LOCATION=asia-northeast1,VERTEX_MODEL=gemini-2.5-flash
+  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/prompt.txt,VERTEX_LOCATION=asia-northeast1,VERTEX_MODEL=gemini-2.5-flash
 ```
 
 #### yahuoku-to-mercarishops
@@ -183,7 +189,7 @@ gcloud functions deploy yahuoku-to-mercarishops `
   --source=yahuoku-to-mercarishops `
   --entry-point=generate_dual_listing `
   --trigger-bucket=YOUR_PRODUCT_BUCKET `
-  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,GEMINI_MODEL=gemini-2.5-flash-lite
+  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,MERCARI_PROMPT_FILE_NAME=prompts/mercari_prompt.txt,GEMINI_MODEL=gemini-2.5-flash-lite
 ```
 
 ### Google Cloud Consoleで環境変数を設定する手順
@@ -206,9 +212,38 @@ Cloud Run Functionsの実行サービスアカウントには、少なくとも�
 - `yahuoku-to-mercarishops` 用の Secret Manager Secret Accessor 権限
 - Cloud Storageトリガーを受けるためのEventarc関連権限
 
-## AI出力仕様
+## プロンプトとCSV変換
 
-`yahuoku-to-mercarishops` では、AIに完成タイトルやIDを作らせません。AIは商品属性だけをJSONで返します。
+このツールでは、商品説明文の生成とCSV変換を分離しています。
+
+1. `prompt.txt`
+
+画像・採寸情報から、ヤフオク用の商品タイトルとHTML説明文を生成します。`_description.txt` は次の形式を正本として扱います。
+
+```text
+タイトル: 完成タイトル
+説明文（HTML）: 完成HTML
+```
+
+2. `mercari_prompt.txt`
+
+ヤフオク用の商品タイトルとHTML説明文を、メルカリShops向けの商品タイトルと本文に変換します。AI出力は次の形式を使います。
+
+```text
+[TITLE]
+メルカリShops用タイトル
+
+[BODY]
+メルカリShops用商品説明文
+```
+
+3. Python処理
+
+AIが生成したタイトル・説明文を勝手に再生成せず、Yahoo CSV / Mercari Shops CSVの各列へ割り当てます。ブランドID、カテゴリID、画像URL、価格、配送情報などのCSV仕様に関わる値だけをPython側で整形・補完します。
+
+## AI属性出力仕様
+
+`yahuoku-to-mercarishops` では、CSV補助情報としてAIに商品属性JSONを返させます。属性抽出結果はブランドID照合、カテゴリID照合、SKU、review判定、`result.json` 用途に限定し、商品タイトルや商品説明文の再生成には使いません。
 
 ```json
 {
@@ -231,29 +266,21 @@ Cloud Run Functionsの実行サービスアカウントには、少なくとも�
 
 Markdownコードフェンス付きJSONにも対応しています。JSON解析に失敗した場合や必須本文が空の場合は、誤ったCSVを出力しないように例外で停止します。
 
-## タイトル生成
+## タイトル・商品説明文の扱い
 
-タイトルはPython側で、次の順序を基本として生成します。
+`_description.txt` はヤフオク用タイトル・HTML説明文の正本です。Yahoo CSVの `タイトル` には抽出したヤフオク用タイトル、`説明` には抽出したHTML説明文を原則そのまま入れます。
 
-```text
-ブランド アイテム名 素材 色 柄 サイズ
-```
+Mercari Shops CSVの `商品名` と `商品説明` には、`mercari_prompt.txt` による変換結果 `[TITLE]` / `[BODY]` を入れます。
 
-空の項目は省略し、同じ単語の重複を避けます。`condition` はタイトルに使いません。`美品`、`新品同様`、`汚れなし`、`傷なし` などの状態語もタイトルから除外します。`タイトル`、`商品名`、`説明文` などの見出しは含めません。
-
-例:
-
-```text
-D&G ダウンジャケット ナイロン ブラック サイズ46
-```
+通常経路では `title_builder.py` の `build_title()` を使わず、`ensure_size_in_description()` による説明文末尾へのサイズ自動追加も行いません。
 
 ## CSV生成方針
 
 CSVは列番号ではなく列名ベースで生成します。
 
 ```python
-row["商品名"] = title
-row["商品説明"] = description
+row["商品名"] = mercari_title
+row["商品説明"] = mercari_body
 row["ブランドID"] = brand_id
 ```
 
@@ -324,12 +351,9 @@ masters/category_master_updated.csv
 
 現時点ではメルカリShopsのネイティブサイズ設定は対象外です。
 
-サイズは次の場所へ反映します。
+サイズは属性抽出結果をもとに次の場所へ反映します。
 
-- 商品名
-- 商品説明
 - メルカリShops CSVの `SKU1_種類`
-- Yahooオークション CSVの `サイズ`
 
 例:
 
@@ -394,15 +418,19 @@ yahuoku-to-mercarishops/
   csv_export.py
   description_guard.py
   listing_data.py
+  mercari_response_parser.py
   title_builder.py
+  yahoo_description_parser.py
   requirements.txt
 
 tests/
   test_listing_content_parser.py
   test_listing_data.py
   test_csv_export.py
+  test_mercari_response_parser.py
   test_mappers.py
   test_main.py
+  test_yahoo_description_parser.py
 ```
 
 ## テスト
@@ -416,7 +444,9 @@ python -m pytest -p no:cacheprovider tests
 - 正常なJSONとMarkdownコードフェンス付きJSONの解析
 - 見出し除去と説明文保持
 - 空の説明文の検出
-- Python側タイトル生成
+- `_description.txt` からのヤフオク用タイトル・HTML説明文抽出
+- `mercari_prompt.txt` 出力からの `[TITLE]` / `[BODY]` 抽出
+- 通常経路でPython側タイトル・説明文再生成を行わないこと
 - ブランド別名解決
 - カテゴリ解決と低信頼度レビュー判定
 - CSVの列名ベース生成

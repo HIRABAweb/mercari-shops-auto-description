@@ -241,14 +241,14 @@ def build_yahoo_row_by_name(
     image_urls: list[str],
     product_code: str,
     title: str,
-    description: str,
+    description_html: str,
     category_match: CategoryMatch,
     defaults: ListingDefaults = ListingDefaults(),
 ) -> dict[str, str]:
     row = empty_row(YAHOO_HEADERS)
     row["カテゴリID"] = category_match.category_id
     row["タイトル"] = f"{title} (管理コード: {product_code})"
-    row["説明"] = description.replace("\n", "<br>")
+    row["説明"] = description_html
     row["開始価格"] = defaults.yahoo_start_price
     row["即決価格"] = defaults.yahoo_buy_now_price
     row["個数"] = defaults.yahoo_quantity
@@ -337,6 +337,8 @@ def build_export_rows(
     product_code: str,
     title: str,
     description: str,
+    yahoo_title: str | None = None,
+    yahoo_description_html: str | None = None,
     attributes: ProductAttributes,
     brand_match: BrandMatch,
     category_match: CategoryMatch,
@@ -358,8 +360,8 @@ def build_export_rows(
         yahoo_row=build_yahoo_row_by_name(
             image_urls=image_urls,
             product_code=product_code,
-            title=title,
-            description=description,
+            title=yahoo_title or title,
+            description_html=yahoo_description_html or description,
             category_match=category_match,
             defaults=defaults,
         ),

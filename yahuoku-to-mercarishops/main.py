@@ -37,7 +37,8 @@ from csv_export import (
 )
 from description_guard import detect_prohibited_expressions
 from listing_data import collect_sorted_image_urls
-from title_builder import build_title, ensure_size_in_description
+from mercari_response_parser import MercariListingContent, parse_mercari_response
+from yahoo_description_parser import parse_yahoo_description
 
 
 LOGGER = logging.getLogger(__name__)
@@ -134,6 +135,25 @@ def get_prompt_from_gcs() -> str:
             error,
         )
         return "商品の情報を整理し、出品用の商品説明本文と属性をJSONで作成してください。"
+
+
+def get_mercari_prompt_from_gcs() -> str:
+    """Load the Mercari Shops conversion prompt."""
+    prompt_bucket_name = os.getenv("MERCARI_PROMPT_BUCKET_NAME", "").strip()
+    if not prompt_bucket_name:
+        prompt_bucket_name = get_required_env("PROMPT_BUCKET_NAME")
+    prompt_file_name = get_required_env("MERCARI_PROMPT_FILE_NAME")
+    try:
+        prompt_blob = storage_client.bucket(prompt_bucket_name).blob(prompt_file_name)
+        prompt_text = prompt_blob.download_as_text(encoding="utf-8")
+    except Exception as error:
+        raise RuntimeError(
+            "メルカリ変換用プロンプトをGCSから読み込めません。"
+            f" bucket={prompt_bucket_name} file={prompt_file_name}"
+        ) from error
+    if not prompt_text.strip():
+        raise RuntimeError("メルカリ変換用プロンプトが空です。")
+    return prompt_text
 
 
 def is_description_file(object_name: str) -> bool:
@@ -246,6 +266,32 @@ def generate_product_attributes(source_description: str) -> ProductAttributes:
     prompt = build_generation_prompt(get_prompt_from_gcs(), source_description)
     response_text = get_model().generate_content(prompt).text
     return parse_product_attributes(response_text)
+
+
+def build_mercari_conversion_prompt(
+    base_prompt: str,
+    yahoo_title: str,
+    yahoo_description_html: str,
+) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        f"【ヤフオク用タイトル】\n{yahoo_title}\n\n"
+        f"【ヤフオク用説明文HTML】\n{yahoo_description_html}\n"
+    )
+
+
+def generate_mercari_listing_content(
+    yahoo_title: str,
+    yahoo_description_html: str,
+) -> MercariListingContent:
+    """Convert fixed Yahoo title and HTML into fixed Mercari title and body."""
+    prompt = build_mercari_conversion_prompt(
+        get_mercari_prompt_from_gcs(),
+        yahoo_title,
+        yahoo_description_html,
+    )
+    response_text = get_model().generate_content(prompt).text
+    return parse_mercari_response(response_text)
 
 
 def build_result_payload(
@@ -369,6 +415,11 @@ def generate_dual_listing(cloud_event):
         if not image_urls:
             raise ValueError(f"商品画像が見つかりません: {context.folder_path}")
 
+        yahoo_content = parse_yahoo_description(source_description)
+        mercari_content = generate_mercari_listing_content(
+            yahoo_content.yahoo_title,
+            yahoo_content.yahoo_description_html,
+        )
         attributes = generate_product_attributes(source_description)
         brand_records = load_brand_records(bucket)
         category_records = load_category_records(bucket)
@@ -380,18 +431,20 @@ def generate_dual_listing(cloud_event):
             category_records,
             attributes.confidence.get("category_name"),
         )
-        title = build_title(attributes, brand_match.brand_name or attributes.brand_name)
-        description = ensure_size_in_description(attributes.description, attributes.size)
-        description_review_terms = detect_prohibited_expressions(description)
+        description_review_terms = detect_prohibited_expressions(
+            mercari_content.mercari_body
+        )
         product_info_missing = (
             MISSING_MEASUREMENT_MARKER in source_description
-            or MISSING_MEASUREMENT_MARKER in description
+            or MISSING_MEASUREMENT_MARKER in mercari_content.mercari_body
         )
         export_rows = build_export_rows(
             image_urls=image_urls,
             product_code=context.product_code,
-            title=title,
-            description=description,
+            title=mercari_content.mercari_title,
+            description=mercari_content.mercari_body,
+            yahoo_title=yahoo_content.yahoo_title,
+            yahoo_description_html=yahoo_content.yahoo_description_html,
             attributes=attributes,
             brand_match=brand_match,
             category_match=category_match,

@@ -1,5 +1,33 @@
 # PROJECT_STATUS.md
 
+## 2026-07-03 更新: _description.txt正本化とMercari変換フロー整理
+
+### やったこと
+
+- `_description.txt` をヤフオク用タイトル・HTML説明文の正本として扱う方針に変更。
+- Yahoo CSVでは `_description.txt` から抽出したタイトルと説明文HTMLを原則そのまま使うように変更。
+- Mercari CSVでは `mercari_prompt.txt` による `[TITLE]` / `[BODY]` 変換結果を `商品名` / `商品説明` に使うように変更。
+- Python側ではタイトル・商品説明文を再生成しない方針に整理。
+- 通常経路から `build_title()` と `ensure_size_in_description()` を外した。
+- Python側の担当を、CSV列マッピング、画像URL、価格、配送、ブランドID、カテゴリID、SKU、review判定などに限定。
+- `_description.txt` 用の `yahoo_description_parser.py` と、Mercari変換応答用の `mercari_response_parser.py` を追加。
+- メルカリ変換用プロンプトを読む環境変数 `MERCARI_PROMPT_FILE_NAME` を追加。`MERCARI_PROMPT_BUCKET_NAME` は任意で、未設定時は `PROMPT_BUCKET_NAME` を使う。
+
+### 確認済み
+
+- ローカルテスト: `python -m pytest -p no:cacheprovider tests`
+- 結果: `69 passed`
+
+### まだ人間が確認すべき事項
+
+- GCS上の `prompt.txt` が `タイトル:` / `説明文（HTML）:` 形式を安定して出すか確認。
+- GCS上の `mercari_prompt.txt` が `[TITLE]` / `[BODY]` 形式を安定して出すか確認。
+- Mercari変換後のタイトル・本文が実運用品質として十分か、複数商品で確認。
+- Yahooオークション向け `yahoo.csv` の実際の出品画面または一括出品ツールへの投入検証。
+- メルカリShops CSVの画像URL方式が今回の変更後も実機で問題ないか再確認。
+
+---
+
 ## 2026-07-03 更新: 入力仕様整理と生成品質ガード追加
 
 ### やったこと
