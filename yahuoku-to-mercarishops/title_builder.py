@@ -6,14 +6,30 @@ from ai_service import ProductAttributes
 
 TITLE_PART_LIMIT = 7
 DEFAULT_TITLE_LIMIT = 65
+UNSAFE_TITLE_TERMS = (
+    "新品同様",
+    "非常に綺麗",
+    "使用感少なめ",
+    "毛玉なし",
+    "汚れなし",
+    "傷なし",
+    "美品",
+)
 
 
 def _normalize(value: str) -> str:
     return " ".join(value.strip().split())
 
 
+def _remove_unsafe_terms(value: str) -> str:
+    cleaned = value
+    for term in UNSAFE_TITLE_TERMS:
+        cleaned = cleaned.replace(term, " ")
+    return _normalize(cleaned)
+
+
 def _append_unique(parts: list[str], seen: set[str], value: str) -> None:
-    normalized = _normalize(value)
+    normalized = _remove_unsafe_terms(value)
     if not normalized:
         return
     key = normalized.casefold()
@@ -24,11 +40,10 @@ def _append_unique(parts: list[str], seen: set[str], value: str) -> None:
 
 
 def build_title(attributes: ProductAttributes, brand_name: str = "", limit: int = DEFAULT_TITLE_LIMIT) -> str:
-    """Build a title from condition, brand, item type, material, color, pattern, size."""
+    """Build a title from brand, item type, material, color, pattern, and size."""
     parts: list[str] = []
     seen: set[str] = set()
     for value in (
-        attributes.condition,
         brand_name or attributes.brand_name,
         attributes.item_type or attributes.category_name,
         attributes.material,

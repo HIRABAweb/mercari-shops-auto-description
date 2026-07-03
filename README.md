@@ -5,6 +5,7 @@
 最終目標は、外注スタッフが商品フォルダへ以下だけをアップロードすれば出品用CSVが生成される状態です。
 
 - 商品画像
+- `product_info.txt`
 - `_SUCCESS.txt`
 
 スプレッドシートは中間管理には使わず、最終成果物はCloud Storage上のCSVとJSONです。
@@ -24,6 +25,46 @@ exports/
 ```
 
 `_DONE.txt` はCSVとJSONの生成が成功した場合のみ最後に作成されます。
+
+## 外注者向けアップロード手順
+
+1. 商品ごとにフォルダを作成する
+2. 商品画像をアップロードする
+3. `product_info.txt` にブランド、カテゴリ、採寸、状態メモを書く
+4. 最後に空の `_SUCCESS.txt` をアップロードする
+5. 処理完了後、`exports/{batch_id}/` に以下が生成される
+
+```text
+mercari.csv
+yahoo.csv
+review_required.csv
+result.json
+_DONE.txt
+```
+
+`_SUCCESS.txt` は処理開始トリガーです。商品情報・採寸情報・状態メモの入力ファイルは `product_info.txt` です。
+
+`product_info.txt` が存在する場合は、その内容を優先してAI生成に利用します。`product_info.txt` がない場合は後方互換として `_SUCCESS.txt` の本文を利用します。どちらも空の場合は、説明文に `【要確認：採寸情報なし】` を付け、`review_required.csv` に商品情報の確認項目を出力します。
+
+入力例:
+
+```text
+ブランド：D&G
+カテゴリ：ダウンジャケット
+性別：メンズ
+サイズ：46
+
+採寸：
+肩幅 45cm
+身幅 52cm
+着丈 68cm
+袖丈 64cm
+
+状態メモ：
+右袖口に軽いスレあり。
+前身頃に目立つ汚れなし。
+ファスナー開閉確認済み。
+```
 
 ## 全体フロー
 
@@ -47,7 +88,7 @@ flowchart TD
 
 ### image-to-description
 
-`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と採寸・状態メモをGeminiへ送信し、商品説明生成用の `_description.txt` をCloud Storageへ保存します。
+`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と `product_info.txt` の商品情報・採寸・状態メモをGeminiへ送信し、商品説明生成用の `_description.txt` をCloud Storageへ保存します。
 
 ### yahuoku-to-mercarishops
 
@@ -58,6 +99,7 @@ flowchart TD
 - 同じ商品フォルダ内の画像URLをファイル名順に取得
 - GeminiからJSON形式の商品属性を取得
 - 商品タイトルをPython側で生成
+- 商品説明の誇張表現・断定表現を検出し、必要に応じて `review_required.csv` へ出力
 - 説明文から `タイトル：` / `商品名：` / `説明文：` などの見出しを除去
 - ブランド名をブランドマスタからブランドIDへ変換
 - カテゴリ情報をカテゴリマスタからカテゴリIDへ変換
@@ -194,15 +236,15 @@ Markdownコードフェンス付きJSONにも対応しています。JSON解析�
 タイトルはPython側で、次の順序を基本として生成します。
 
 ```text
-状態 ブランド アイテム名 素材 色 柄 サイズ
+ブランド アイテム名 素材 色 柄 サイズ
 ```
 
-空の項目は省略し、同じ単語の重複を避けます。`タイトル`、`商品名`、`説明文` などの見出しは含めません。
+空の項目は省略し、同じ単語の重複を避けます。`condition` はタイトルに使いません。`美品`、`新品同様`、`汚れなし`、`傷なし` などの状態語もタイトルから除外します。`タイトル`、`商品名`、`説明文` などの見出しは含めません。
 
 例:
 
 ```text
-美品 D&G ダウンジャケット ナイロン ブラック 46
+D&G ダウンジャケット ナイロン ブラック サイズ46
 ```
 
 ## CSV生成方針
@@ -310,6 +352,8 @@ M相当
 - ブランドIDが特定できない
 - カテゴリIDが特定できない
 - AIのカテゴリ信頼度がしきい値未満
+- 商品説明に誇張表現・断定表現の可能性がある語句が含まれる
+- `product_info.txt` と `_SUCCESS.txt` の本文が空で、商品情報・採寸情報が不足している
 
 ## result.json
 
@@ -348,6 +392,7 @@ yahuoku-to-mercarishops/
   brand_mapper.py
   category_mapper.py
   csv_export.py
+  description_guard.py
   listing_data.py
   title_builder.py
   requirements.txt

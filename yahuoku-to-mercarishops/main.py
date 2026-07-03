@@ -35,6 +35,7 @@ from csv_export import (
     build_csv_text,
     build_export_rows,
 )
+from description_guard import detect_prohibited_expressions
 from listing_data import collect_sorted_image_urls
 from title_builder import build_title, ensure_size_in_description
 
@@ -52,6 +53,7 @@ DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSED_FILE_NAME = "_processed.txt"
 PROCESSING_LOCK_FILE_NAME = "_processing.lock"
 EXPORT_ROOT = "exports"
+MISSING_MEASUREMENT_MARKER = "【要確認：採寸情報なし】"
 _MODEL = None
 _API_KEY: str | None = None
 
@@ -380,6 +382,11 @@ def generate_dual_listing(cloud_event):
         )
         title = build_title(attributes, brand_match.brand_name or attributes.brand_name)
         description = ensure_size_in_description(attributes.description, attributes.size)
+        description_review_terms = detect_prohibited_expressions(description)
+        product_info_missing = (
+            MISSING_MEASUREMENT_MARKER in source_description
+            or MISSING_MEASUREMENT_MARKER in description
+        )
         export_rows = build_export_rows(
             image_urls=image_urls,
             product_code=context.product_code,
@@ -388,6 +395,8 @@ def generate_dual_listing(cloud_event):
             attributes=attributes,
             brand_match=brand_match,
             category_match=category_match,
+            description_review_terms=description_review_terms,
+            product_info_missing=product_info_missing,
         )
         review_required = bool(export_rows.review_rows)
         result_payload = build_result_payload(

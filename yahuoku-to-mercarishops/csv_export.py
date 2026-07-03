@@ -10,6 +10,7 @@ from pathlib import Path
 from ai_service import ProductAttributes
 from brand_mapper import BrandMatch
 from category_mapper import CategoryMatch
+from description_guard import REVIEW_REASON_ASSERTIVE_DESCRIPTION
 
 
 MERCARI_CSV_FILE_NAME = "mercari.csv"
@@ -128,6 +129,7 @@ YAHOO_HEADERS = [
 ]
 
 REVIEW_REQUIRED_HEADERS = ["商品管理コード", "確認項目", "候補1", "候補2", "理由"]
+MISSING_PRODUCT_INFO_REASON = "product_info.txt と _SUCCESS.txt の本文が空です。"
 
 
 def load_csv_headers(path: Path) -> list[str]:
@@ -282,6 +284,8 @@ def build_review_rows(
     product_code: str,
     brand_match: BrandMatch,
     category_match: CategoryMatch,
+    description_review_terms: list[str] | None = None,
+    product_info_missing: bool = False,
 ) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     if brand_match.review_required:
@@ -304,6 +308,26 @@ def build_review_rows(
                 "理由": category_match.reason,
             }
         )
+    for term in description_review_terms or []:
+        rows.append(
+            {
+                "商品管理コード": product_code,
+                "確認項目": "商品説明",
+                "候補1": term,
+                "候補2": "",
+                "理由": REVIEW_REASON_ASSERTIVE_DESCRIPTION,
+            }
+        )
+    if product_info_missing:
+        rows.append(
+            {
+                "商品管理コード": product_code,
+                "確認項目": "商品情報",
+                "候補1": "",
+                "候補2": "",
+                "理由": MISSING_PRODUCT_INFO_REASON,
+            }
+        )
     return rows
 
 
@@ -316,6 +340,8 @@ def build_export_rows(
     attributes: ProductAttributes,
     brand_match: BrandMatch,
     category_match: CategoryMatch,
+    description_review_terms: list[str] | None = None,
+    product_info_missing: bool = False,
     defaults: ListingDefaults = ListingDefaults(),
 ) -> ExportRows:
     return ExportRows(
@@ -337,7 +363,13 @@ def build_export_rows(
             category_match=category_match,
             defaults=defaults,
         ),
-        review_rows=build_review_rows(product_code, brand_match, category_match),
+        review_rows=build_review_rows(
+            product_code,
+            brand_match,
+            category_match,
+            description_review_terms,
+            product_info_missing,
+        ),
     )
 
 

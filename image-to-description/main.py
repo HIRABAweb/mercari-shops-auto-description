@@ -10,6 +10,7 @@ from google.cloud import storage
 from vertexai.generative_models import GenerativeModel, Part
 
 SUCCESS_FILE_NAME = "_SUCCESS.txt"
+PRODUCT_INFO_FILE_NAME = "product_info.txt"
 DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSING_LOCK_FILE_NAME = "_description_processing.lock"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
@@ -88,25 +89,52 @@ def is_success_file(object_name: str) -> bool:
 
 def build_description_prompt(base_prompt: str, measurement_info: str) -> str:
     """Append product measurements to the managed base prompt."""
+    prompt_measurement_info = measurement_info.strip() or MISSING_MEASUREMENT_MARKER
     return (
         f"{base_prompt}\n\n"
-        f"【商品データ・採寸情報】\n{measurement_info}\n\n"
-        "上記の採寸情報を必ず含めて説明文を作成してください。"
+        f"【商品データ・採寸情報】\n{prompt_measurement_info}\n\n"
+        "上記の商品情報・採寸情報・状態メモを必ず確認し、"
+        "事実として確認できる内容だけで説明文を作成してください。"
     )
 
 
-def load_measurement_info(bucket, object_name: str) -> tuple[str, bool]:
-    """Read measurements; allow a human-review marker when they are unavailable."""
+def load_text_if_present(bucket, object_name: str, *, require_exists: bool = False) -> str:
+    """Return object text when present, treating missing or unreadable files as empty."""
     try:
-        measurement_info = bucket.blob(object_name).download_as_text(encoding="utf-8")
-        if not measurement_info.strip():
-            print("WARNING: 採寸情報が空です。採寸情報なしで続行します。")
-            return "", False
-        print(f"INFO: 採寸情報を取得しました（文字数: {len(measurement_info)}）。")
-        return measurement_info, True
+        blob = bucket.blob(object_name)
+        if require_exists and hasattr(blob, "exists") and not blob.exists():
+            return ""
+        return blob.download_as_text(encoding="utf-8")
     except Exception as error:
-        print(f"WARNING: 採寸情報の読み込みに失敗しました。採寸情報なしで続行します: {error}")
-        return "", False
+        print(f"WARNING: 入力ファイルを読み込めませんでした: {object_name}, error={error}")
+        return ""
+
+
+def load_measurement_info(bucket, object_name: str) -> tuple[str, bool]:
+    """Read product information, preferring product_info.txt over the trigger body."""
+    folder_path = os.path.dirname(object_name)
+    product_info_name = f"{folder_path}/{PRODUCT_INFO_FILE_NAME}"
+
+    product_info = load_text_if_present(
+        bucket,
+        product_info_name,
+        require_exists=True,
+    ).strip()
+    if product_info:
+        print(
+            f"INFO: product_info.txtから商品情報を取得しました（文字数: {len(product_info)}）。"
+        )
+        return product_info, True
+
+    trigger_text = load_text_if_present(bucket, object_name).strip()
+    if trigger_text:
+        print(
+            f"INFO: _SUCCESS.txt本文から商品情報を取得しました（文字数: {len(trigger_text)}）。"
+        )
+        return trigger_text, True
+
+    print("WARNING: product_info.txt と _SUCCESS.txt の本文が空です。")
+    return "", False
 
 
 def image_sort_key(blob) -> tuple[int, str]:
