@@ -1,5 +1,35 @@
 # PROJECT_STATUS.md
 
+## 2026-07-06 更新: _SUCCESS.txt正式運用への統一
+
+### やったこと
+
+- 通常運用の入力を、商品画像と `_SUCCESS.txt` のみに統一。
+- `_SUCCESS.txt` を処理開始トリガー兼、採寸情報・状態メモの入力ファイルとして扱う方針に変更。
+- 通常運用から `product_info.txt` を除外。
+- `image-to-description` では `_SUCCESS.txt` 本文のみを読み、本文が空の場合は `_description.txt` を生成せずに明確なエラーで停止するように変更。
+- `_description.txt` の先頭に `【要確認：採寸情報なし】` を付ける通常経路を廃止。
+- READMEを、外注者がアップロードするものは「商品画像」と「採寸・状態メモを書いた `_SUCCESS.txt`」だけである内容に更新。
+
+### 確認済み
+
+- `image-to-description/main.py` の通常経路で `product_info.txt` を読まない構成に変更済み。
+- `_SUCCESS.txt` 本文が空の場合はエラー停止し、AI生成・`_description.txt` 作成へ進まない構成に変更済み。
+- README上の外注者向け手順を `_SUCCESS.txt` 正式運用へ更新済み。
+
+### まだ人間が確認すべき事項
+
+- GCS上の `prompt.txt` が `タイトル:` / `説明文（HTML）:` 形式を安定して出すか確認。
+- GCS上の `mercari_prompt.txt` が `[TITLE]` / `[BODY]` 形式を安定して出すか確認。
+- Cloud Functionsの環境変数 `PROMPT_FILE_NAME=prompts/prompt.txt` を確認。
+- Cloud Functionsの環境変数 `MERCARI_PROMPT_FILE_NAME=prompts/mercari_prompt.txt` を確認。
+- 1商品でCloud Functions実行確認。
+- 3〜5商品で再現性確認。
+- メルカリShops CSV画像URL方式の再実機確認。
+- Yahooオークション向け `yahoo.csv` の実際の出品画面または一括出品ツールへの投入検証。
+
+---
+
 ## 2026-07-03 更新: _description.txt正本化とMercari変換フロー整理
 
 ### やったこと
@@ -25,34 +55,6 @@
 - Mercari変換後のタイトル・本文が実運用品質として十分か、複数商品で確認。
 - Yahooオークション向け `yahoo.csv` の実際の出品画面または一括出品ツールへの投入検証。
 - メルカリShops CSVの画像URL方式が今回の変更後も実機で問題ないか再確認。
-
----
-
-## 2026-07-03 更新: 入力仕様整理と生成品質ガード追加
-
-### やったこと
-
-- 外注者向け入力ファイルとして `product_info.txt` を追加。
-- `product_info.txt` が存在する場合は、商品情報・採寸情報・状態メモとして優先利用するように変更。
-- `product_info.txt` がない場合は、後方互換として `_SUCCESS.txt` の本文を利用するように維持。
-- `_SUCCESS.txt` は基本的に処理開始トリガーとして扱う方針に整理。
-- `product_info.txt` と `_SUCCESS.txt` の本文がどちらも空の場合は、説明文に `【要確認：採寸情報なし】` を付け、`review_required.csv` に `商品情報` の確認行を出力できるようにした。
-- AI生成文に `美品`、`新品同様` などの断定的または誇張の可能性がある表現が含まれる場合、`review_required.csv` に `商品説明` の確認行を出力できるようにした。
-- 商品タイトルの構成から `condition` を除外し、危険な状態語がタイトルへ混入しにくいようにした。
-- READMEへ外注者向けアップロード手順を追記。
-
-### 確認済み
-
-- ローカルテスト: `python -m pytest -p no:cacheprovider tests`
-- 結果: `56 passed`
-
-### まだ人間が確認すべき事項
-
-- Yahooオークション向け `yahoo.csv` の実際の出品画面または一括出品ツールへの投入検証。
-- 複数商品でのメルカリShops CSV投入テストと再現性確認。
-- `product_info.txt` の記入ルールを外注者へ渡し、実運用で迷いが出ないか確認。
-- AI生成文のreview検出語句が厳しすぎないか、または不足していないかの実データ確認。
-- `review_required.csv` の確認フローを、誰がいつ修正するか運用として確定。
 
 ---
 
@@ -88,200 +90,4 @@
 ### Yahooオークション側の検証状況
 
 - Yahooオークション向け `yahoo.csv` の生成処理は実装済み。
-- 既存テストで、Yahooオークション用CSVの画像URL出力とヘッダー構成は回帰確認済み。
-- ただし、Yahooオークションの実際の出品画面または一括出品ツールへのCSV投入は未検証。
-- 公開資料やポートフォリオでは「Yahooオークション向けCSV生成機能」と表現する。
-- 「Yahooオークション出品まで実機検証済み」とは表現しない。
-
-### 生成品質改善TODO
-
-優先度高:
-
-1. 状態説明で、画像や状態メモから断定できない誇張表現を禁止する。
-2. 商品名生成テンプレートを固定し、タイトルの揺れを抑える。
-3. 商品説明欄に商品名を再掲しない。
-4. カテゴリIDの自動設定精度を上げるか、半自動運用方針を決める。
-5. 3〜5商品でメルカリShops CSV投入テストを行い、生成品質と再現性を確認する。
-
----
-
-
-## 2026-06-29 更新: メルカリShops画像URL方式への修正
-
-### 背景
-
-CSV出力自体は成功したが、メルカリShops投入時に画像ファイル名が存在しないエラーが発生した。
-
-原因は、メルカリShops用CSVの画像列に画像ファイル名だけを出力しており、メルカリShops側に同名画像を事前アップロードする運用が必要だったため。
-
-### 修正方針
-
-外注者の二重アップロードを避けるため、メルカリShops用CSVの画像列にはGCS公開画像URLを出力する方式へ変更する。
-
-### 次に確認すること
-
-1. 1商品で `mercari.csv` を再生成する
-2. `商品画像名_1` にGCS公開URLが入っていることを確認する
-3. URLをブラウザで開き、画像が表示されることを確認する
-4. メルカリShopsへCSVを投入する
-5. 画像が正しく取り込まれるか確認する
-
-
----
-
-
-## 2026-06-29 更新: GCSトリガーからCSV出力まで成功
-
-### やったこと
-
-- Google Cloud Run FunctionsにPR #2最新コードを再デプロイ
-- メモリ不足による起動失敗を確認し、メモリを512MiBへ変更
-- 古いEventarcトリガーを整理
-- GCSにテスト商品フォルダを作成
-- `_SUCCESS.txt` アップロードを起点に処理を実行
-- `image-to-description` と `yahuoku-to-mercarishops` の一連の処理を確認
-
-### 出力されたファイル
-
-- `mercari.csv`
-- `yahoo.csv`
-- `review_required.csv`
-- `result.json`
-- `_DONE.txt`
-
-### 検証結果
-
-- `result.json` の `success` は `true`
-- `_DONE.txt` の中身は `done`
-- `mercari.csv` は88列で出力
-- `yahoo.csv` は39列で出力
-- `review_required.csv` はヘッダーのみで、確認必要項目なし
-- 処理時間は約40秒
-
-### この時点で残っていた課題
-
-- メルカリShopsへのCSV投入では、画像ファイル名が存在しないという理由で失敗
-- CSV内の画像名と、メルカリShopsに渡す画像ファイル名の一致確認が必要
-- 出力CSVと画像ファイルをセットで扱う運用仕様を決める必要がある
-
-### その後の対応
-
-1. メルカリShops用CSVの画像列をファイル名方式からGCS公開画像URL方式へ変更
-2. `mercari.csv` の `商品画像名_1` 〜 `商品画像名_20` にURLが入ることをテストで確認
-3. メルカリShopsへのCSVアップロードと下書き保存まで実機検証
-4. Yahooオークション側はCSV生成と既存テストでの回帰確認まで完了、実投入は未検証
-
-
----
-
-
-## 2026-06-28 更新: P0/P1修正をPR #2に反映
-
-### やったこと
-
-- Codexレビューで指摘されたP0/P1課題を修正
-- `PROJECT_ID`, `SECRET_NAME`, `PROMPT_BUCKET_NAME`, `PROMPT_FILE_NAME`, `GEMINI_MODEL` を環境変数から読むように変更
-- `get_api_key()` とGemini client生成をインポート時ではなく初回実行時に遅延化
-- `image-to-description` 側の `vertexai.init(...)` と `GenerativeModel(...)` も初回実行時に遅延化
-- 必須環境変数未設定時に明示的なエラーを出すように変更
-- Secret Managerパスが `projects/{PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest` になるように修正
-- `.env.example` を追加
-- READMEにCloud Run Functionsのデプロイ手順、環境変数、IAM、Console設定手順を追加
-- READMEの `result.json` 例を実装に合わせて修正
-- 環境変数未設定・Secret Managerパス・Vertex AI初期化前チェックのテストを追加
-
-### 検証結果
-
-.\.test-venv\Scripts\python.exe -m pytest -p no:cacheprovider tests
-
-結果:
-43 passed
-
-`git diff --check` も問題なし。
-
-### Git反映状況
-
-* Commit: `dac7b717674816b067a471139ef81c1467c0b28b`
-* Short SHA: `dac7b71`
-* Message: `Fix Cloud Run configuration handling`
-* Branch: `feature/title-description-separation`
-* Remote: `origin/feature/title-description-separation`
-* リモートとの差分: `ahead: 0 / behind: 0`
-
-### 現在の状態
-
-- P0/P1は修正済み。
-- 修正内容はPR #2に反映済み。
-- Google Cloud上での実行テストはまだ未実施。
-- P2のREADME内の既存ズレは未修正。
-
-### 次にやること
-
-1. PR #2上で差分を確認する
-2. Google Cloud Consoleで必要な環境変数を設定する
-3. Secret ManagerのSecret名を確認する
-4. Cloud Run Functionsで実行テストする
-5. Cloud Loggingでエラーを確認する
-
-
----
-
-
-## 現在の進捗
-
-このプロジェクトは、リユースアパレル商品の出品業務を自動化するためのPython / Google Cloud Run Functionsプロジェクトです。
-
-目的は、外注者が商品画像と採寸情報をアップロードしたら、メルカリShopsに一括登録できるCSVを自動生成することです。
-
-現在は、Pull Request #2「CSV出力ワークフローへ改修」の実機検証と最終確認まで進行しています。
-
-## 現在のブランチ
-
-- 作業ブランチ: `feature/title-description-separation`
-- PR: #2
-- 状態: メルカリShops CSVアップロード・下書き保存まで実機検証済み
-
-## 完了したこと
-
-- GitHubリポジトリ作成
-- 作業ブランチ作成
-- Pull Request #2 作成
-- 商品説明生成ツールからCSV出力ワークフローへ改修
-- Googleスプレッドシート出力を廃止
-- GCS上にCSV/JSONを出力する構成へ変更
-- メルカリShops用CSVを生成する処理を追加
-- Yahooオークション用CSVを生成する処理を追加
-- 確認が必要な商品を `review_required.csv` に出す構成へ変更
-- 処理結果を `result.json` に出す構成へ変更
-- 成功時のみ `_DONE.txt` を作る構成へ変更
-- ローカルテストとCloud Shellテストで `45 passed` を確認
-- Cloud Functions Gen2へ最新ブランチをデプロイ済み
-- Google Cloud Storageトリガーでの起動を確認済み
-- メルカリShopsへのCSVアップロードと下書き保存を確認済み
-
-## まだやっていないこと
-
-- Yahooオークションの出品画面または一括出品ツールへのCSV投入テスト
-- 複数商品でのメルカリShops CSV投入テスト
-- AI生成文の品質改善
-- 外注者が使えるアップロード手順の作成
-
-## 現在の重要な注意点
-
-メルカリShops用CSVは実機でアップロードと下書き保存まで確認済みです。
-
-Yahooオークション側はCSV生成機能として実装済みで、既存テストでは回帰確認済みです。ただし、Yahooオークションの実際の出品画面または一括出品ツールへのCSV投入は未検証です。
-
-そのため、転職活動や面接では以下のように説明します。
-
-「GCSトリガーでメルカリShops向けCSVとYahooオークション向けCSVを生成する機能を実装しました。メルカリShopsはCSVアップロードと下書き保存まで実機検証済みです。Yahooオークション側はCSV生成機能として実装済みで、実際の出品ツールへの投入は今後検証予定です。」
-
-「Yahooオークション出品まで実機検証済み」とはまだ言いません。
-
-## 次にやること
-
-1. PR #2の最終差分を確認し、問題なければmainへマージする
-2. Yahooオークションの出品画面または一括出品ツールへ `yahoo.csv` を投入して検証する
-3. 3〜5商品でメルカリShops CSV投入テストを行う
-4. AI生成文の誇張表現、商品名再掲、タイトル揺れ、カテゴリ未設定を改善する
-5. 外注者向けのアップロード手順を作成する
+- 実際の出品画面または一括出品ツールへの投入検証は未実施。
