@@ -362,8 +362,22 @@ tests/
 
 ## テスト
 
+正式な回帰確認コマンドは次の通りです。
+
 ```powershell
-python -m pytest -p no:cacheprovider tests
+python -m pytest -q tests
+```
+
+`image-to-description` 単体のCloud Storageイベントハンドラ用テストは次のコマンドで確認します。
+
+```powershell
+python -m pytest -q image-to-description/test_image_description.py
+```
+
+両方をまとめて確認する場合は次のコマンドを使用します。このリポジトリでは `tests/test_image_description.py` と `image-to-description/test_image_description.py` の同名テストファイルを同時収集できるように、pytestのimport modeを `importlib` に固定しています。
+
+```powershell
+python -m pytest -q tests image-to-description/test_image_description.py
 ```
 
 主に次を検証しています。

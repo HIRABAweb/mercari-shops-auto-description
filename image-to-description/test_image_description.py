@@ -141,10 +141,18 @@ class ImageDescriptionTest(unittest.TestCase):
         prompt_attempts = iter([None, "商品説明を作成してください。"])
         self.module.load_prompt_from_gcs = lambda bucket, filename: next(prompt_attempts)
 
-        with self.assertRaisesRegex(RuntimeError, "プロンプトをGCSから読み込めません"):
-            self.module.get_prompt()
+        with patch.dict(
+            "os.environ",
+            {
+                "PROMPT_BUCKET_NAME": "prompt-bucket",
+                "PROMPT_FILE_NAME": "image-prompt.txt",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "プロンプトをGCSから読み込めません"):
+                self.module.get_prompt()
 
-        self.assertEqual(self.module.get_prompt(), "商品説明を作成してください。")
+            self.assertEqual(self.module.get_prompt(), "商品説明を作成してください。")
 
     def test_images_are_number_sorted_and_limited_to_twenty(self):
         blobs = [
