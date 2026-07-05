@@ -1,12 +1,13 @@
 # Mercari Shops / Yahooオークション 自動出品CSV生成ツール
 
-商品画像と採寸・状態メモから、メルカリShops用CSVとYahooオークション用CSVを生成するGoogle Cloud Functions構成のツールです。
+商品画像と `_SUCCESS.txt` に書かれた採寸・状態メモから、メルカリShops用CSVとYahooオークション用CSVを生成するGoogle Cloud Functions構成のツールです。
 
 最終目標は、外注スタッフが商品フォルダへ以下だけをアップロードすれば出品用CSVが生成される状態です。
 
 - 商品画像
-- `product_info.txt`
-- `_SUCCESS.txt`
+- 採寸・状態メモを書いた `_SUCCESS.txt`
+
+`product_info.txt` は通常運用では使用しません。
 
 スプレッドシートは中間管理には使わず、最終成果物はCloud Storage上のCSVとJSONです。
 
@@ -30,9 +31,8 @@ exports/
 
 1. 商品ごとにフォルダを作成する
 2. 商品画像をアップロードする
-3. `product_info.txt` にブランド、カテゴリ、採寸、状態メモを書く
-4. 最後に空の `_SUCCESS.txt` をアップロードする
-5. 処理完了後、`exports/{batch_id}/` に以下が生成される
+3. 採寸情報・状態メモを書いた `_SUCCESS.txt` を最後にアップロードする
+4. 処理完了後、`exports/{batch_id}/` に以下が生成される
 
 ```text
 mercari.csv
@@ -42,9 +42,9 @@ result.json
 _DONE.txt
 ```
 
-`_SUCCESS.txt` は処理開始トリガーです。商品情報・採寸情報・状態メモの入力ファイルは `product_info.txt` です。
+`_SUCCESS.txt` は処理開始トリガーであり、通常運用における唯一の外部入力メモです。`_SUCCESS.txt` の本文には採寸情報・状態メモを記載してください。本文が空の場合、`_description.txt` は生成せず、明確なエラーで停止します。
 
-`product_info.txt` が存在する場合は、その内容を優先してAI生成に利用します。`product_info.txt` がない場合は後方互換として `_SUCCESS.txt` の本文を利用します。どちらも空の場合は、説明文に `【要確認：採寸情報なし】` を付け、`review_required.csv` に商品情報の確認項目を出力します。
+ファイル名は必ず `_SUCCESS.txt` にしてください。`_SUCCESS.TXT` や `_success.txt` では処理対象になりません。
 
 入力例:
 
@@ -70,7 +70,7 @@ _DONE.txt
 
 ```mermaid
 flowchart TD
-    A[商品画像をGCSへアップロード] --> B[_SUCCESS.txtをアップロード]
+    A[商品画像をGCSへアップロード] --> B[採寸・状態メモ入り_SUCCESS.txtをアップロード]
     B --> C[image-to-description]
     C --> D[prompt.txtでヤフオク用_description.txtを生成]
     D --> E[yahuoku-to-mercarishops]
@@ -79,7 +79,7 @@ flowchart TD
     F --> H[属性JSONを補助情報として解析]
     H --> I[ブランドマスタとカテゴリマスタを照合]
     I --> J[mercari.csv / yahoo.csvを生成]
-    G --> J[mercari.csv / yahoo.csvを生成]
+    G --> J
     I --> K[必要時のみreview_required.csvへ確認項目を出力]
     J --> K
     K --> L[result.jsonを保存]
@@ -90,7 +90,9 @@ flowchart TD
 
 ### image-to-description
 
-`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と `product_info.txt` の商品情報・採寸・状態メモをGeminiへ送信し、`prompt.txt` に従ってヤフオク用のタイトルとHTML説明文を含む `_description.txt` をCloud Storageへ保存します。
+`_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と `_SUCCESS.txt` 本文の採寸・状態メモをGeminiへ送信し、`prompt.txt` に従ってヤフオク用のタイトルとHTML説明文を含む `_description.txt` をCloud Storageへ保存します。
+
+通常経路では `product_info.txt` は読みません。採寸・状態メモは `_SUCCESS.txt` に集約します。
 
 ### yahuoku-to-mercarishops
 
@@ -135,24 +137,13 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | --- | --- | --- |
 | `PROJECT_ID` | Secret Managerを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
 | `SECRET_NAME` | Gemini APIキーを保存したSecret Managerのシークレット名 | `gemini-api-key` |
-| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
-| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
+| `PROMPT_BUCKET_NAME` | 属性抽出用プロンプトを置くGCSバケット名 | `your-prompt-bucket` |
+| `PROMPT_FILE_NAME` | 属性抽出用プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
 | `MERCARI_PROMPT_BUCKET_NAME` | メルカリ変換用プロンプトを置くGCSバケット名。未設定時は `PROMPT_BUCKET_NAME` を使用 | `your-prompt-bucket` |
 | `MERCARI_PROMPT_FILE_NAME` | `mercari_prompt.txt` のオブジェクト名 | `prompts/mercari_prompt.txt` |
 | `GEMINI_MODEL` | Gemini APIモデル名 | `gemini-2.5-flash-lite` |
 
 ローカル確認用のサンプルは `.env.example` にあります。実際の値を書く `.env` はGit管理しません。
-
-### Secret Manager
-
-Gemini APIキーはSecret Managerへ保存します。
-
-```powershell
-gcloud secrets create gemini-api-key --replication-policy="automatic"
-gcloud secrets versions add gemini-api-key --data-file="path/to/api-key.txt"
-```
-
-`api-key.txt` や実際のAPIキー文字列はGitHubへコミットしません。
 
 ### デプロイコマンド例
 
@@ -191,26 +182,6 @@ gcloud functions deploy yahuoku-to-mercarishops `
   --trigger-bucket=YOUR_PRODUCT_BUCKET `
   --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,MERCARI_PROMPT_FILE_NAME=prompts/mercari_prompt.txt,GEMINI_MODEL=gemini-2.5-flash-lite
 ```
-
-### Google Cloud Consoleで環境変数を設定する手順
-
-1. Google Cloud Consoleで対象のCloud Run Functionsを開く
-2. `編集` を選択する
-3. `ランタイム、ビルド、接続、セキュリティの設定` を開く
-4. `ランタイム環境変数` に必要な環境変数を追加する
-5. `デプロイ` を選択する
-
-Secret Managerに保存したAPIキー本体は環境変数へ直接入力しません。`SECRET_NAME` にはシークレット名だけを入力します。
-
-### 必要なIAM
-
-Cloud Run Functionsの実行サービスアカウントには、少なくとも次の権限が必要です。
-
-- 商品画像・トリガーファイル・出力CSVを扱うGCSバケットへの読み書き権限
-- プロンプトを置くGCSバケットへの読み取り権限
-- `image-to-description` 用の Vertex AI 利用権限
-- `yahuoku-to-mercarishops` 用の Secret Manager Secret Accessor 権限
-- Cloud Storageトリガーを受けるためのEventarc関連権限
 
 ## プロンプトとCSV変換
 
@@ -377,7 +348,8 @@ M相当
 - カテゴリIDが特定できない
 - AIのカテゴリ信頼度がしきい値未満
 - 商品説明に誇張表現・断定表現の可能性がある語句が含まれる
-- `product_info.txt` と `_SUCCESS.txt` の本文が空で、商品情報・採寸情報が不足している
+
+`_SUCCESS.txt` の本文が空の場合は、`image-to-description` が `_description.txt` を生成せずに停止するため、後段の `review_required.csv` には進みません。
 
 ## result.json
 
@@ -408,7 +380,6 @@ M相当
 image-to-description/
   main.py
   requirements.txt
-  prompt.txt
 
 yahuoku-to-mercarishops/
   main.py
@@ -422,6 +393,13 @@ yahuoku-to-mercarishops/
   title_builder.py
   yahoo_description_parser.py
   requirements.txt
+
+prompts/
+  prompt.txt
+  mercari_prompt.txt
+
+docs/samples/
+  _SUCCESS.txt
 
 tests/
   test_listing_content_parser.py
@@ -437,6 +415,7 @@ tests/
 
 ```powershell
 python -m pytest -p no:cacheprovider tests
+python -m pytest -p no:cacheprovider image-to-description/test_image_description.py
 ```
 
 主に次を検証しています。
@@ -451,20 +430,4 @@ python -m pytest -p no:cacheprovider tests
 - カテゴリ解決と低信頼度レビュー判定
 - CSVの列名ベース生成
 - 出力成果物パスと `_DONE.txt` 作成順
-- 処理失敗時に元ファイルを処理済みにしないこと
-
-## 必要な主なライブラリ
-
-- functions-framework
-- google-cloud-storage
-- google-cloud-secret-manager
-- google-generativeai
-- google-auth
-
-## 現在の制約
-
-- メルカリShopsの公式テンプレート、ブランドマスタ、カテゴリマスタは同梱済みです。将来テンプレートが更新された場合は再取得が必要です。
-- ブランドIDとカテゴリIDの精度は、`masters/brand_master.csv` と `masters/category_master_updated.csv` の整備品質に依存します。
-- メルカリShopsのネイティブサイズ設定は今回の対象外です。
-- 複数商品を1バッチで集約する構造は将来対応を見据えていますが、現在の実装は1商品フォルダ単位で成果物を生成します。
-- AI生成内容は最終公開前に人が確認する前提です。
+- 処理失敗時に元ファイルが再処理可能なまま残ること
