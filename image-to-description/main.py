@@ -10,13 +10,11 @@ from google.cloud import storage
 from vertexai.generative_models import GenerativeModel, Part
 
 SUCCESS_FILE_NAME = "_SUCCESS.txt"
-PRODUCT_INFO_FILE_NAME = "product_info.txt"
 DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSING_LOCK_FILE_NAME = "_description_processing.lock"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 MAX_IMAGE_COUNT = 20
 MAX_IMAGE_TOTAL_BYTES = 100 * 1000 * 1000
-MISSING_MEASUREMENT_MARKER = "【要確認：採寸情報なし】"
 
 
 storage_client = storage.Client()
@@ -87,9 +85,19 @@ def is_success_file(object_name: str) -> bool:
     return object_name.endswith(f"/{SUCCESS_FILE_NAME}")
 
 
+def ensure_measurement_info(measurement_info: str) -> str:
+    """Require _SUCCESS.txt to contain the measurement and condition memo."""
+    cleaned = measurement_info.strip()
+    if not cleaned:
+        raise ValueError(
+            "_SUCCESS.txt の本文が空です。採寸情報・状態メモを記入してからアップロードしてください。"
+        )
+    return cleaned
+
+
 def build_description_prompt(base_prompt: str, measurement_info: str) -> str:
     """Append product measurements to the managed base prompt."""
-    prompt_measurement_info = measurement_info.strip() or MISSING_MEASUREMENT_MARKER
+    prompt_measurement_info = ensure_measurement_info(measurement_info)
     return (
         f"{base_prompt}\n\n"
         f"【商品データ・採寸情報】\n{prompt_measurement_info}\n\n"
@@ -110,31 +118,15 @@ def load_text_if_present(bucket, object_name: str, *, require_exists: bool = Fal
         return ""
 
 
-def load_measurement_info(bucket, object_name: str) -> tuple[str, bool]:
-    """Read product information, preferring product_info.txt over the trigger body."""
-    folder_path = os.path.dirname(object_name)
-    product_info_name = f"{folder_path}/{PRODUCT_INFO_FILE_NAME}"
-
-    product_info = load_text_if_present(
-        bucket,
-        product_info_name,
-        require_exists=True,
-    ).strip()
-    if product_info:
-        print(
-            f"INFO: product_info.txtから商品情報を取得しました（文字数: {len(product_info)}）。"
-        )
-        return product_info, True
-
+def load_measurement_info(bucket, object_name: str) -> str:
+    """Read product information from the triggering _SUCCESS.txt body."""
     trigger_text = load_text_if_present(bucket, object_name).strip()
-    if trigger_text:
-        print(
-            f"INFO: _SUCCESS.txt本文から商品情報を取得しました（文字数: {len(trigger_text)}）。"
+    if not trigger_text:
+        raise ValueError(
+            "_SUCCESS.txt の本文が空です。採寸情報・状態メモを記入してからアップロードしてください。"
         )
-        return trigger_text, True
-
-    print("WARNING: product_info.txt と _SUCCESS.txt の本文が空です。")
-    return "", False
+    print(f"INFO: _SUCCESS.txt本文から商品情報を取得しました（文字数: {len(trigger_text)}）。")
+    return trigger_text
 
 
 def image_sort_key(blob) -> tuple[int, str]:
@@ -188,13 +180,6 @@ def acquire_processing_lock(bucket, folder_path: str):
     return lock_blob
 
 
-def add_measurement_review_marker(description_text: str, measurement_available: bool) -> str:
-    """Make missing measurements visible to the human who reviews the listing."""
-    if measurement_available:
-        return description_text
-    return f"{MISSING_MEASUREMENT_MARKER}\n{description_text}"
-
-
 @functions_framework.cloud_event
 def generate_description_from_trigger(cloud_event):
     """Generate and store a description when a product's _SUCCESS.txt is uploaded."""
@@ -223,9 +208,7 @@ def generate_description_from_trigger(cloud_event):
             print(f"INFO: フォルダ '{folder_path}' は既に処理済みです。")
             return
 
-        measurement_info, measurement_available = load_measurement_info(
-            bucket, trigger_file_name
-        )
+        measurement_info = load_measurement_info(bucket, trigger_file_name)
         prompt = build_description_prompt(get_prompt(), measurement_info)
         image_parts = load_image_parts(bucket_name, folder_path)
 
@@ -233,10 +216,7 @@ def generate_description_from_trigger(cloud_event):
             raise ValueError(f"フォルダ '{folder_path}' 内に処理対象の画像が見つかりませんでした。")
 
         print(f"INFO: {len(image_parts)}枚の画像を使用して商品説明文を生成します。")
-        description_text = add_measurement_review_marker(
-            get_model().generate_content([prompt, *image_parts]).text,
-            measurement_available,
-        )
+        description_text = get_model().generate_content([prompt, *image_parts]).text
         output_blob.upload_from_string(
             description_text,
             content_type="text/plain; charset=utf-8",
