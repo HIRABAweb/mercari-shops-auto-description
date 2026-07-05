@@ -178,57 +178,35 @@ class ImageDescriptionTest(unittest.TestCase):
             ):
                 self.module.get_prompt()
 
-    def test_missing_measurements_are_marked_for_human_review(self):
-        description = self.module.add_measurement_review_marker("商品説明", False)
-
-        self.assertEqual(description, "【要確認：採寸情報なし】\n商品説明")
-        self.assertEqual(
-            self.module.add_measurement_review_marker("商品説明", True), "商品説明"
-        )
-
-    def test_empty_measurement_file_is_treated_as_missing(self):
+    def test_success_body_is_required(self):
         bucket = FakeBucket([FakeBlob("A0001/_SUCCESS.txt", data=b"  \n")])
 
-        measurement_info, measurement_available = self.module.load_measurement_info(
-            bucket, "A0001/_SUCCESS.txt"
-        )
+        with self.assertRaisesRegex(ValueError, "_SUCCESS.txt の本文が空です"):
+            self.module.load_measurement_info(bucket, "A0001/_SUCCESS.txt")
 
-        self.assertEqual(measurement_info, "")
-        self.assertFalse(measurement_available)
-
-    def test_product_info_takes_priority_over_success_body(self):
-        product_info = FakeBlob("A0001/product_info.txt", data="ブランド：D&G\nサイズ：46".encode())
+    def test_success_body_is_used_even_if_product_info_exists(self):
+        product_info = FakeBlob("A0001/product_info.txt", data="使わない情報".encode())
         product_info.exists_result = True
         bucket = FakeBucket(
             [
                 product_info,
-                FakeBlob("A0001/_SUCCESS.txt", data="古い採寸情報".encode()),
+                FakeBlob("A0001/_SUCCESS.txt", data="肩幅 45cm\n身幅 52cm".encode()),
             ]
         )
 
-        measurement_info, measurement_available = self.module.load_measurement_info(
-            bucket, "A0001/_SUCCESS.txt"
-        )
-
-        self.assertEqual(measurement_info, "ブランド：D&G\nサイズ：46")
-        self.assertTrue(measurement_available)
-
-    def test_success_body_is_used_when_product_info_is_missing(self):
-        bucket = FakeBucket(
-            [FakeBlob("A0001/_SUCCESS.txt", data="肩幅 45cm\n身幅 52cm".encode())]
-        )
-
-        measurement_info, measurement_available = self.module.load_measurement_info(
-            bucket, "A0001/_SUCCESS.txt"
-        )
+        measurement_info = self.module.load_measurement_info(bucket, "A0001/_SUCCESS.txt")
 
         self.assertEqual(measurement_info, "肩幅 45cm\n身幅 52cm")
-        self.assertTrue(measurement_available)
 
-    def test_empty_input_prompt_contains_human_review_marker(self):
-        prompt = self.module.build_description_prompt("base prompt", "")
+    def test_build_description_prompt_rejects_empty_input(self):
+        with self.assertRaisesRegex(ValueError, "_SUCCESS.txt の本文が空です"):
+            self.module.build_description_prompt("base prompt", "")
 
-        self.assertIn("【要確認：採寸情報なし】", prompt)
+    def test_build_description_prompt_uses_measurement_text_without_marker(self):
+        prompt = self.module.build_description_prompt("base prompt", "肩幅 45cm")
+
+        self.assertIn("肩幅 45cm", prompt)
+        self.assertNotIn("【要確認：採寸情報なし】", prompt)
 
     def test_success_trigger_file_name_must_be_exact_under_product_folder(self):
         self.assertEqual(self.module.SUCCESS_FILE_NAME, "_SUCCESS.txt")
