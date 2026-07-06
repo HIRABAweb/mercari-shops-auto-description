@@ -1,5 +1,34 @@
 # PROJECT_STATUS.md
 
+## 2026-07-06 更新: Phase 1承認ワークフローをmain現行設計へ移植中
+
+### 方針
+
+- PR #5はDraftのまま設計・試作ブランチとして維持する。
+- `origin/main` がCSV artifact出力設計へ進んでいるため、PR #5を直接mergeせず、`origin/main` 起点の `feature/phase1-review-workflow-on-main` で移植する。
+- 既存のCloud Storage成果物 `mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json`、`_DONE.txt` は維持する。
+- `SPREADSHEET_ID` が設定されている場合のみ、Google Sheets上の `Draft_Mercari_List`、`Review_List`、`Approved_Mercari_CSV`、`Yahoo_List` へ追加同期する。
+- Sheets同期が有効な場合は、CSV/JSON出力とSheets同期が成功した後に `_DONE.txt` を作成する。
+
+### 実装状況
+
+- `sheets_workflow.py` を追加し、Google Sheets承認ワークフローを既存CSV生成処理から分離した。
+- `export_approved_mercari_csv` HTTP entrypointを追加した。
+- Draft/Yahooの冪等キーは先頭画像URL、Reviewの冪等キーは `batch_prefix/product_code` とした。
+- `Approved_Mercari_CSV` は指定された `batch_prefix` の `approved` 商品だけから再生成する。
+
+### 検証
+
+- `python -m pytest -p no:cacheprovider tests`
+- 結果: `52 passed`
+
+### 本番前に確認すること
+
+- 本番Spreadsheet IDとサービスアカウントの編集権限
+- `export_approved_mercari_csv` HTTP entrypointのIAMまたは呼び出し制御
+- 外注先アップロードパスを `exports/{batch_id}/{item_id}/` に統一する運用
+- Google Sheets上での実データ確認と、Approved CSVのメルカリShops投入テスト
+
 ## 2026-07-01 更新: PR #2最終確認と実機検証状況
 
 ### 到達点

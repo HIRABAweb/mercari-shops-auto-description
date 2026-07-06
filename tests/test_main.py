@@ -35,6 +35,7 @@ def load_main_module():
     FakeSecretClient.requests = []
     functions_framework = types.ModuleType("functions_framework")
     functions_framework.cloud_event = lambda function: function
+    functions_framework.http = lambda function: function
 
     google = types.ModuleType("google")
     google.__path__ = []
@@ -134,6 +135,11 @@ class FakeStorageClient:
 
     def list_blobs(self, bucket_name, prefix):
         return [types.SimpleNamespace(name=f"{prefix}001.jpg")]
+
+
+class FakeRequest:
+    def __init__(self, args=None):
+        self.args = args or {}
 
 
 class MainCsvExportTest(unittest.TestCase):
@@ -282,6 +288,60 @@ class MainCsvExportTest(unittest.TestCase):
         self.assertEqual(bucket.blobs[outputs["done"]].upload_calls[0][0], "done\n")
         result_json = bucket.blobs[outputs["result_json"]].upload_calls[0][0]
         self.assertEqual(json.loads(result_json)["outputs"], outputs)
+
+    def test_upload_export_artifacts_can_delay_done_marker(self):
+        bucket = FakeBucket()
+        context = self.module.build_export_context("A0001/item_description.txt")
+        result_payload = self.module.build_result_payload(
+            context=context,
+            category_id="456",
+            brand_id="123",
+            review_required=False,
+            processing_time=1.23456,
+            outputs={},
+        )
+
+        outputs = self.module.upload_export_artifacts(
+            bucket,
+            context,
+            {"蝠・刀蜷・": "蝠・刀蜷・"},
+            {"繧ｿ繧､繝医Ν": "蝠・刀蜷・"},
+            [],
+            result_payload,
+            write_done=False,
+        )
+
+        self.assertNotIn(outputs["done"], bucket.blobs)
+
+        self.module.upload_done_marker(bucket, outputs["done"])
+
+        self.assertEqual(bucket.blobs[outputs["done"]].upload_calls[0][0], "done\n")
+
+    def test_export_approved_mercari_csv_requires_batch_prefix(self):
+        body, status = self.module.export_approved_mercari_csv(FakeRequest())
+
+        self.assertEqual(status, 400)
+        self.assertIn("batch_prefix is required", body)
+
+    def test_export_approved_mercari_csv_reports_unknown_batch(self):
+        self.module.export_approved_mercari_rows = lambda batch_prefix: -1
+
+        body, status = self.module.export_approved_mercari_csv(
+            FakeRequest(args={"batch_prefix": "exports/2026-07-06"})
+        )
+
+        self.assertEqual(status, 404)
+        self.assertIn("no review rows found", body)
+
+    def test_export_approved_mercari_csv_reports_export_count(self):
+        self.module.export_approved_mercari_rows = lambda batch_prefix: 2
+
+        body, status = self.module.export_approved_mercari_csv(
+            FakeRequest(args={"batch_prefix": "exports/2026-07-06"})
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn("exported 2 approved Mercari rows", body)
 
     def test_failure_keeps_source_and_releases_lock_for_retry(self):
         bucket = FakeBucket()

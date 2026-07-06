@@ -92,6 +92,7 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
 | `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
 | `GEMINI_MODEL` | Gemini APIモデル名 | `gemini-2.5-flash-lite` |
+| `SPREADSHEET_ID` | Phase 1 Google Sheets承認ワークフローを使う場合の出力先Spreadsheet ID。未設定の場合は既存のGCS CSV/JSON出力のみ行います。 | `your-google-spreadsheet-id` |
 
 ローカル確認用のサンプルは `.env.example` にあります。実際の値を書く `.env` はGit管理しません。
 
@@ -143,6 +144,23 @@ gcloud functions deploy yahuoku-to-mercarishops `
   --trigger-bucket=YOUR_PRODUCT_BUCKET `
   --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,GEMINI_MODEL=gemini-2.5-flash-lite
 ```
+
+Phase 1のGoogle Sheets承認ワークフローを有効にする場合は、同じFunctionに `SPREADSHEET_ID=YOUR_SPREADSHEET_ID` も設定します。未設定の場合、従来どおりCloud Storage上の `mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json`、`_DONE.txt` のみを出力します。
+
+承認済みメルカリShops用CSVをGoogle Sheets上に再生成するHTTP entrypointは、同じソースから別Functionとしてデプロイします。
+
+```powershell
+gcloud functions deploy export-approved-mercari-csv `
+  --gen2 `
+  --runtime=python312 `
+  --region=YOUR_REGION `
+  --source=yahuoku-to-mercarishops `
+  --entry-point=export_approved_mercari_csv `
+  --trigger-http `
+  --set-env-vars=SPREADSHEET_ID=YOUR_SPREADSHEET_ID
+```
+
+実行時はbatch混在を避けるため、HTTP query parameterで `batch_prefix=exports/{batch_id}` を必ず指定します。
 
 ### Google Cloud Consoleで環境変数を設定する手順
 
@@ -311,6 +329,21 @@ M相当
 - カテゴリIDが特定できない
 - AIのカテゴリ信頼度がしきい値未満
 
+## Phase 1 Google Sheets承認ワークフロー
+
+`SPREADSHEET_ID` を設定すると、既存のGCS成果物に加えてGoogle Sheetsへ次のワークシートを出力します。
+
+- `Draft_Mercari_List`: メルカリShops用CSVと同じヘッダーの下書き行
+- `Review_List`: 商品ごとの確認理由と `review_status`
+- `Approved_Mercari_CSV`: `review_status` が `approved` の行だけを再生成した最終CSV用シート
+- `Yahoo_List`: Yahooオークション向けCSV行
+
+通常のGCS出力は維持します。Sheets同期が有効な場合、`mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json` とSheets同期が成功した後に `_DONE.txt` を作成します。Sheets同期に失敗した場合は `_DONE.txt` を作らず、Cloud Functionsのリトライ対象にします。
+
+`Draft_Mercari_List` と `Yahoo_List` は先頭画像URLを冪等キーとして扱うため、同じ商品管理コードが別batchで再利用されても、画像URLが異なれば別商品として扱えます。`Review_List` は `batch_prefix/product_code` をキーにし、既存行がある場合は手動編集を保護するため追記しません。
+
+承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで `export_approved_mercari_csv?batch_prefix=exports/{batch_id}` を実行します。指定batchのreview行がない場合は、既存の `Approved_Mercari_CSV` を変更せずにエラー終了します。
+
 ## result.json
 
 処理結果をJSONで保存します。
@@ -349,6 +382,7 @@ yahuoku-to-mercarishops/
   category_mapper.py
   csv_export.py
   listing_data.py
+  sheets_workflow.py
   title_builder.py
   requirements.txt
 
@@ -356,6 +390,7 @@ tests/
   test_listing_content_parser.py
   test_listing_data.py
   test_csv_export.py
+  test_sheets_workflow.py
   test_mappers.py
   test_main.py
 ```
@@ -399,6 +434,7 @@ python -m pytest -q tests image-to-description/test_image_description.py
 - google-cloud-secret-manager
 - google-generativeai
 - google-auth
+- gspread
 
 ## 現在の制約
 

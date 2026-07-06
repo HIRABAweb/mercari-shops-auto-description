@@ -36,6 +36,11 @@ from csv_export import (
     build_export_rows,
 )
 from listing_data import collect_sorted_image_urls
+from sheets_workflow import (
+    export_approved_mercari_rows,
+    phase1_sheets_enabled,
+    write_phase1_sheet_rows,
+)
 from title_builder import build_title, ensure_size_in_description
 
 
@@ -281,6 +286,8 @@ def upload_export_artifacts(
     yahoo_row: dict[str, str],
     review_rows: list[dict[str, str]],
     result_payload: dict,
+    *,
+    write_done: bool = True,
 ) -> dict[str, str]:
     """Write all final artifacts. _DONE.txt is written last only after success."""
     outputs = {
@@ -315,13 +322,37 @@ def upload_export_artifacts(
         json.dumps(result_payload, ensure_ascii=False, indent=2),
         "application/json; charset=utf-8",
     )
+    if write_done:
+        upload_done_marker(bucket, outputs["done"])
+    return outputs
+
+
+def upload_done_marker(bucket, object_name: str) -> None:
     upload_text(
         bucket,
-        outputs["done"],
+        object_name,
         "done\n",
         "text/plain; charset=utf-8",
     )
-    return outputs
+
+
+def request_batch_prefix(request) -> str:
+    args = getattr(request, "args", None)
+    if not args:
+        return ""
+    return (args.get("batch_prefix") or "").strip("/")
+
+
+@functions_framework.http
+def export_approved_mercari_csv(request):
+    """HTTP entrypoint that rebuilds Approved_Mercari_CSV for one batch."""
+    batch_prefix = request_batch_prefix(request)
+    if not batch_prefix:
+        return ("batch_prefix is required\n", 400)
+    exported_count = export_approved_mercari_rows(batch_prefix)
+    if exported_count < 0:
+        return (f"no review rows found for {batch_prefix}\n", 404)
+    return (f"exported {exported_count} approved Mercari rows for {batch_prefix}\n", 200)
 
 
 storage_client = storage.Client()
@@ -405,7 +436,18 @@ def generate_dual_listing(cloud_event):
             export_rows.yahoo_row,
             export_rows.review_rows,
             result_payload,
+            write_done=False,
         )
+        if phase1_sheets_enabled():
+            write_phase1_sheet_rows(
+                mercari_row=export_rows.mercari_row,
+                yahoo_row=export_rows.yahoo_row,
+                review_rows=export_rows.review_rows,
+                folder_path=context.folder_path,
+                product_code=context.product_code,
+                file_path=description_file_name,
+            )
+        upload_done_marker(bucket, result_payload["outputs"]["done"])
         mark_description_as_processed(
             bucket,
             description_blob,
