@@ -44,6 +44,17 @@ def test_extracts_plain_description_heading():
     assert parsed.yahoo_description_html == "<section>説明HTML</section>"
 
 
+def test_tolerates_legacy_missing_measurement_marker_prefix():
+    parsed = parse_yahoo_description(
+        "【要確認：採寸情報なし】\n"
+        "タイトル: D&G ダウンジャケット 46\n"
+        "説明文（HTML）: <p>説明HTML</p>"
+    )
+
+    assert parsed.yahoo_title == "D&G ダウンジャケット 46"
+    assert parsed.yahoo_description_html == "<p>説明HTML</p>"
+
+
 def test_empty_title_raises_error():
     with pytest.raises(YahooDescriptionParseError, match="タイトルが空"):
         parse_yahoo_description("タイトル:\n説明文（HTML）: <p>説明</p>")

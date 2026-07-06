@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 TITLE_HEADING_PATTERN = r"タイトル\s*[:：]"
 DESCRIPTION_HEADING_PATTERN = r"説明文(?:[（(]\s*HTML\s*[）)])?\s*[:：]"
+MISSING_MEASUREMENT_MARKER = "【要確認：採寸情報なし】"
 YAHOO_DESCRIPTION_PATTERN = re.compile(
     rf"^\s*{TITLE_HEADING_PATTERN}\s*(?P<title>.*?)"
     rf"\s*{DESCRIPTION_HEADING_PATTERN}\s*(?P<description>.*?)\s*$",
@@ -27,7 +28,11 @@ class YahooDescription:
 
 def parse_yahoo_description(raw_text: str) -> YahooDescription:
     """Extract Yahoo title and HTML description without fallback generation."""
-    match = YAHOO_DESCRIPTION_PATTERN.match(raw_text)
+    source_text = raw_text.lstrip()
+    if source_text.startswith(MISSING_MEASUREMENT_MARKER):
+        source_text = source_text[len(MISSING_MEASUREMENT_MARKER) :].lstrip()
+
+    match = YAHOO_DESCRIPTION_PATTERN.match(source_text)
     if not match:
         raise YahooDescriptionParseError(
             "_description.txtに必要な見出し「タイトル:」「説明文（HTML）:」がありません。"

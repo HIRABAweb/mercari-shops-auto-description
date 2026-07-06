@@ -129,7 +129,7 @@ YAHOO_HEADERS = [
 ]
 
 REVIEW_REQUIRED_HEADERS = ["商品管理コード", "確認項目", "候補1", "候補2", "理由"]
-MISSING_PRODUCT_INFO_REASON = "product_info.txt と _SUCCESS.txt の本文が空です。"
+MISSING_PRODUCT_INFO_REASON = "_SUCCESS.txt の本文が空です。"
 
 
 def load_csv_headers(path: Path) -> list[str]:

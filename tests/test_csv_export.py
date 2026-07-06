@@ -178,7 +178,7 @@ def test_description_without_guard_terms_does_not_add_review_row():
     assert rows.review_rows == []
 
 
-def test_missing_product_info_adds_review_required_row():
+def test_missing_success_text_adds_review_required_row():
     rows = build_export_rows(
         image_urls=[],
         product_code="ABC001",

@@ -1,6 +1,7 @@
 """Tests for image-to-description safeguards without cloud credentials."""
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -119,32 +120,52 @@ class ImageDescriptionTest(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
 
-    def test_missing_measurements_are_marked_for_human_review(self):
-        description = self.module.add_measurement_review_marker("商品説明", False)
-
-        self.assertEqual(description, "【要確認：採寸情報なし】\n商品説明")
-        self.assertEqual(
-            self.module.add_measurement_review_marker("商品説明", True), "商品説明"
-        )
-
-    def test_empty_measurement_file_is_treated_as_missing(self):
+    def test_success_body_is_required(self):
         bucket = FakeBucket([FakeBlob("A0001/_SUCCESS.txt", data=b"  \n")])
 
-        measurement_info, measurement_available = self.module.load_measurement_info(
-            bucket, "A0001/_SUCCESS.txt"
+        with self.assertRaisesRegex(ValueError, "_SUCCESS.txt の本文が空です"):
+            self.module.load_measurement_info(bucket, "A0001/_SUCCESS.txt")
+
+    def test_success_body_is_used_even_if_product_info_exists(self):
+        product_info = FakeBlob("A0001/product_info.txt", data="使わない情報".encode())
+        product_info.exists_result = True
+        bucket = FakeBucket(
+            [
+                product_info,
+                FakeBlob("A0001/_SUCCESS.txt", data="肩幅 45cm\n身幅 52cm".encode()),
+            ]
         )
 
-        self.assertEqual(measurement_info, "")
-        self.assertFalse(measurement_available)
+        measurement_info = self.module.load_measurement_info(bucket, "A0001/_SUCCESS.txt")
+
+        self.assertEqual(measurement_info, "肩幅 45cm\n身幅 52cm")
+
+    def test_build_description_prompt_rejects_empty_input(self):
+        with self.assertRaisesRegex(ValueError, "_SUCCESS.txt の本文が空です"):
+            self.module.build_description_prompt("base prompt", "")
+
+    def test_build_description_prompt_uses_measurement_text_without_marker(self):
+        prompt = self.module.build_description_prompt("base prompt", "肩幅 45cm")
+
+        self.assertIn("肩幅 45cm", prompt)
+        self.assertNotIn("【要確認：採寸情報なし】", prompt)
 
     def test_prompt_loading_retries_after_a_transient_failure(self):
         prompt_attempts = iter([None, "商品説明を作成してください。"])
         self.module.load_prompt_from_gcs = lambda bucket, filename: next(prompt_attempts)
 
-        with self.assertRaisesRegex(RuntimeError, "プロンプトをGCSから読み込めません"):
-            self.module.get_prompt()
+        with patch.dict(
+            os.environ,
+            {
+                "PROMPT_BUCKET_NAME": "prompt-bucket",
+                "PROMPT_FILE_NAME": "image-prompt.txt",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "プロンプトをGCSから読み込めません"):
+                self.module.get_prompt()
 
-        self.assertEqual(self.module.get_prompt(), "商品説明を作成してください。")
+            self.assertEqual(self.module.get_prompt(), "商品説明を作成してください。")
 
     def test_images_are_number_sorted_and_limited_to_twenty(self):
         blobs = [

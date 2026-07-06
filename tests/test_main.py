@@ -303,7 +303,7 @@ class MainCsvExportTest(unittest.TestCase):
         bucket = FakeBucket()
         bucket.source.text = (
             "タイトル: ヤフオク用 D&G ダウンジャケット 46\n"
-            "説明文（HTML）: <p>ヤフオク用HTML説明文</p>"
+            "説明文（HTML）: <p>美品として訴求するヤフオク用HTML説明文</p>"
         )
         self.module.storage_client = FakeStorageClient(bucket)
         self.module.generate_product_attributes = lambda description: self.module.ProductAttributes(
@@ -355,8 +355,10 @@ class MainCsvExportTest(unittest.TestCase):
         self.assertIn("メルカリ用 D&G ダウンジャケット サイズ46", mercari_csv)
         self.assertIn("メルカリ用商品説明文", mercari_csv)
         self.assertIn("ヤフオク用 D&G ダウンジャケット 46 (管理コード: A0001)", yahoo_csv)
-        self.assertIn("<p>ヤフオク用HTML説明文</p>", yahoo_csv)
+        self.assertIn("<p>美品として訴求するヤフオク用HTML説明文</p>", yahoo_csv)
         self.assertNotIn("属性抽出用説明", mercari_csv)
+        review_csv = bucket.blobs["exports/A0001/review_required.csv"].upload_calls[0][0]
+        self.assertNotIn("商品説明", review_csv)
 
     def test_failure_keeps_source_and_releases_lock_for_retry(self):
         bucket = FakeBucket()
