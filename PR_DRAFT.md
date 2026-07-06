@@ -49,7 +49,7 @@ python -m pytest -p no:cacheprovider tests
 Current result:
 
 ```text
-70 passed
+73 passed
 ```
 
 ## Pre-merge Checks
@@ -60,4 +60,3 @@ Current result:
   production.
 - Confirm HTTP access control for `export_approved_mercari_csv`.
 - Confirm Cloud Functions entrypoints and environment variables before deploy.
-
