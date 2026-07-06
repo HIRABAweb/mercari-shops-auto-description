@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -34,7 +35,17 @@ class FakeWorksheet:
 
     def update(self, values=None, range_name=None, **kwargs):
         self.update_calls.append((range_name, values, kwargs))
-        self.values = values or []
+        if range_name == "A1":
+            self.values = values or []
+            return
+        match = re.match(r"A(\d+):", range_name or "")
+        if not match:
+            self.values = values or []
+            return
+        row_index = int(match.group(1)) - 1
+        while len(self.values) <= row_index:
+            self.values.append([])
+        self.values[row_index] = (values or [[]])[0]
 
     def batch_clear(self, ranges):
         self.batch_clear_calls.append(ranges)
@@ -167,3 +178,122 @@ def test_export_approved_mercari_rows_returns_minus_one_for_unknown_batch(monkey
     approved = spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI]
     assert exported_count == -1
     assert approved.values == [["old row"]]
+
+
+def test_list_batch_summaries_counts_review_status(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [
+            sheets_workflow.REVIEW_SHEET_HEADERS,
+            ["exports/2026-07-06/A0001", "exports/2026-07-06", "A0001", "approved"],
+            ["exports/2026-07-06/A0002", "exports/2026-07-06", "A0002", "needs_review"],
+            ["exports/2026-07-07/A0003", "exports/2026-07-07", "A0003", "needs_review"],
+        ],
+    )
+
+    summaries = sheets_workflow.list_batch_summaries()
+
+    summary_by_prefix = {summary.batch_prefix: summary for summary in summaries}
+    assert summary_by_prefix["exports/2026-07-06"].total_count == 2
+    assert summary_by_prefix["exports/2026-07-06"].approved_count == 1
+    assert summary_by_prefix["exports/2026-07-06"].needs_review_count == 1
+
+
+def test_update_draft_item_updates_only_matching_batch_row(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    row_a = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001.jpg",
+            "A0001",
+        )
+        | {"商品名": "old"},
+    )
+    row_b = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg",
+            "A0001",
+        )
+        | {"商品名": "other batch"},
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS, row_a, row_b],
+    )
+
+    sheets_workflow.update_draft_item(
+        "2026-07-06",
+        "A0001",
+        {"商品名": "new title", "存在しない列": "ignored"},
+    )
+
+    draft = spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI]
+    assert draft.values[1][MERCARI_HEADERS.index("商品名")] == "new title"
+    assert draft.values[2][MERCARI_HEADERS.index("商品名")] == "other batch"
+
+
+def test_approve_review_item_marks_status_and_timestamp(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [
+            sheets_workflow.REVIEW_SHEET_HEADERS,
+            [
+                "exports/2026-07-06/A0001",
+                "exports/2026-07-06",
+                "A0001",
+                "needs_review",
+                "",
+                "brand review",
+                "",
+                "",
+            ],
+        ],
+    )
+
+    sheets_workflow.approve_review_item("2026-07-06", "A0001", "2026-07-06T12:00:00+00:00")
+
+    review = spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW]
+    assert review.values[1][3] == "approved"
+    assert review.values[1][7] == "2026-07-06T12:00:00+00:00"
+
+
+def test_export_approved_mercari_rows_and_csv_returns_csv_text(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    row_a = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001.jpg",
+            "A0001",
+        )
+        | {"商品名": "approved title"},
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS, row_a],
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [
+            sheets_workflow.REVIEW_SHEET_HEADERS,
+            ["exports/2026-07-06/A0001", "exports/2026-07-06", "A0001", "approved"],
+        ],
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_APPROVED_MERCARI,
+        [],
+    )
+
+    exported_count, csv_text = sheets_workflow.export_approved_mercari_rows_and_csv(
+        "exports/2026-07-06"
+    )
+
+    assert exported_count == 1
+    assert "approved title" in csv_text
+    assert csv_text.splitlines()[0].split(",")[0] == "商品画像名_1"

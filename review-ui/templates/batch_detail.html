@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ batch_id }}{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <h1>{{ batch_id }}</h1>
+      <p><code>{{ batch_prefix }}</code></p>
+    </div>
+    <div class="heading-actions">
+      <form method="post" action="{{ url_for('export_batch', batch_id=batch_id) }}">
+        <button class="button button--primary" type="submit">Generate CSV</button>
+      </form>
+      <a class="button" href="{{ url_for('download_batch', batch_id=batch_id) }}">Download CSV</a>
+    </div>
+  </section>
+
+  <section class="item-list">
+    {% for item in items %}
+      <article class="item-row">
+        <div class="thumb">
+          {% if item.first_image_url %}
+            <img src="{{ item.first_image_url }}" alt="">
+          {% endif %}
+        </div>
+        <div class="item-main">
+          <div class="item-title">{{ item.title or item.product_code }}</div>
+          <div class="item-code">{{ item.product_code }}</div>
+          {% if item.reason %}
+            <div class="reason">{{ item.reason }}</div>
+          {% endif %}
+        </div>
+        <div>
+          <span class="badge {{ 'badge--ok' if item.review_status == 'approved' else 'badge--warn' }}">
+            {{ item.review_status }}
+          </span>
+        </div>
+        <div class="actions">
+          <a class="button" href="{{ url_for('item_detail', batch_id=batch_id, product_code=item.product_code) }}">Edit</a>
+        </div>
+      </article>
+    {% else %}
+      <div class="empty">No items found for this batch.</div>
+    {% endfor %}
+  </section>
+{% endblock %}

@@ -443,3 +443,54 @@ python -m pytest -q tests image-to-description/test_image_description.py
 - メルカリShopsのネイティブサイズ設定は今回の対象外です。
 - 複数商品を1バッチで集約する構造は将来対応を見据えていますが、現在の実装は1商品フォルダ単位で成果物を生成します。
 - AI生成内容は最終公開前に人が確認する前提です。
+
+## Phase 1 Review UI
+
+Google Sheetsを直接編集する代わりに、`review-ui` をCloud Runへデプロイして、商品ごとの確認・修正・承認・CSV生成をWeb画面で行えます。
+
+### 役割
+
+- `Draft_Mercari_List` をメルカリShops用CSVの下書きデータとして読み書きします。
+- `Review_List` の `review_status` を商品単位で `approved` に更新します。
+- `Approved_Mercari_CSV` を指定batchの承認済み商品のみで再生成します。
+- 同じCSV内容をGCSへ `exports/{batch_id}/approved/mercari_shops.csv` として保存し、Web画面からダウンロードできるようにします。
+- `Yahoo_List` は初期版では参照対象です。Yahoo向けCSVの既存挙動は変更しません。
+
+### 初期版の画面
+
+- batch一覧: `Review_List` からbatchごとの全商品数、承認済み数、未承認数を表示します。
+- 商品一覧: 画像サムネイル、商品管理コード、商品名、review理由、承認状態を表示します。
+- 商品編集: 商品名、商品説明、価格、ブランドID、カテゴリID、状態、SKU1種類、在庫数、画像URLを編集できます。
+- CSV全列編集: 必要な場合のみ詳細欄からMercari CSV全列を編集できます。
+- CSV生成: `approved` の商品だけを最終CSVへ出力します。
+
+### 環境変数
+
+| 環境変数 | 用途 | 例 |
+| --- | --- | --- |
+| `SPREADSHEET_ID` | Phase 1 workflowのSpreadsheet ID | `your-google-spreadsheet-id` |
+| `PRODUCT_BUCKET_NAME` | 承認済みCSVを保存するGCS bucket | `your-product-bucket` |
+| `APPROVED_CSV_OBJECT_TEMPLATE` | 承認済みCSVの保存先テンプレート | `exports/{batch_id}/approved/mercari_shops.csv` |
+| `FLASK_SECRET_KEY` | 画面メッセージ用のFlask secret | ランダムな文字列 |
+
+### デプロイ方針
+
+`review-ui` は既存の2つのCloud Functionsとは別のCloud Runサービスとしてデプロイします。既存の `_SUCCESS.txt` 生成処理、`_description.txt` 変換処理、GCS成果物出力は維持します。
+
+Dockerfileは `review-ui/Dockerfile` を使います。Cloud BuildやCloud Runでビルドする場合は、リポジトリルートをビルドコンテキストにしてください。`review-ui` 単体をコンテキストにすると、既存の `yahuoku-to-mercarishops` 側のCSVヘッダーやSheets共通ロジックを参照できません。
+
+本番ではCloud Runの認証を必須にし、Google認証/IAPでアクセスできるユーザーを制限してください。未認証公開は想定していません。
+
+具体的な本番デプロイ案は `docs/review_ui_deployment.md` に記録しています。初期設定ではCloud Run direct IAPを使い、許可ユーザーを `hirabaaiwork@gmail.com` に限定します。課金回避のため、実デプロイ前にbudget/alert、Cloud Runの `min-instances=0`、`max-instances=1`、Artifact Registry画像の削除運用を確認してください。
+
+### 運用手順
+
+1. 外注者が `exports/{batch_id}/{item_id}/` に商品画像と `_SUCCESS.txt` をアップロードします。
+2. 既存Cloud Functionsが `_description.txt`、GCS成果物、Google Sheets下書きを生成します。
+3. 運用者はReview UIでbatchを開き、確認が必要な商品を修正します。
+4. 問題がなければ商品を承認します。
+5. batch単位で「承認済みCSV生成」を実行します。
+6. Web画面から `mercari_shops.csv` をダウンロードします。
+7. ダウンロードしたCSVをメルカリShopsへアップロードし、メルカリShops画面上で最終確認して出品します。
+
+`review_required.csv` は引き続き確認項目の記録です。メルカリShopsへ直接アップロードするCSVではありません。

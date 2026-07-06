@@ -1,5 +1,28 @@
 # PROJECT_STATUS.md
 
+## 2026-07-07 更新: Phase 1 Review UI 初期実装
+
+### 方針
+- Google Sheets承認ワークフローを裏側の保存先として維持し、Cloud Run用の `review-ui` を追加した。
+- 既存の `_SUCCESS.txt` → `_description.txt` → GCS CSV/JSON/Sheets同期の流れは変更しない。
+- Web UIは `Draft_Mercari_List` の編集、`Review_List` の承認、`Approved_Mercari_CSV` とGCS上の承認済みCSV生成を担当する。
+
+### 実装状況
+- `review-ui` にFlaskアプリ、テンプレート、CSS、Dockerfile、requirementsを追加。
+- batch一覧、商品一覧、商品編集、商品承認、batch単位の承認済みCSV生成・ダウンロード画面を追加。
+- `sheets_workflow.py` にbatch一覧、商品取得、下書き更新、承認、承認済みCSVテキスト生成の共通処理を追加。
+- 承認済みCSVのGCS保存先は `exports/{batch_id}/approved/mercari_shops.csv`。
+
+### 本番前に確認すること
+- Cloud Run `review-ui` のIAPまたはGoogle認証設定。
+- `SPREADSHEET_ID` は `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc` を使う。
+- Review UIの許可ユーザーは `hirabaaiwork@gmail.com` に限定する。
+- `PRODUCT_BUCKET_NAME` は新規bucketを作るより、既存の商品アップロードbucketを優先して使う。
+- `FLASK_SECRET_KEY` の本番値。
+- `review-ui/Dockerfile` を使う場合、ビルドコンテキストをリポジトリルートにすること。
+- 実データでMercari Shops CSVのダウンロード、アップロード、最終確認までの通し検証。
+- 課金回避のため、実デプロイ前にbudget/alert、Cloud Run `min-instances=0`、`max-instances=1`、Artifact Registry画像削除運用を確認する。
+
 ## 2026-07-06 更新: Phase 1承認ワークフローをmain現行設計へ移植中
 
 ### 方針

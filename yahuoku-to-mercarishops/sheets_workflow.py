@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import os
+from dataclasses import dataclass
 
 from csv_export import MERCARI_HEADERS, REVIEW_REQUIRED_HEADERS, YAHOO_HEADERS
 
@@ -26,12 +29,42 @@ REVIEW_SHEET_HEADERS = [
     "approved_at",
 ]
 
+MERCARI_PRODUCT_CODE_HEADER = "SKU1_商品管理コード"
+MERCARI_TITLE_HEADER = "商品名"
+MERCARI_DESCRIPTION_HEADER = "商品説明"
+MERCARI_IMAGE_HEADER_PREFIX = "商品画像名_"
+
 WORKSHEET_SPECS = {
     SHEET_NAME_DRAFT_MERCARI: (1000, len(MERCARI_HEADERS)),
     SHEET_NAME_REVIEW: (1000, len(REVIEW_SHEET_HEADERS)),
     SHEET_NAME_APPROVED_MERCARI: (1000, len(MERCARI_HEADERS)),
     SHEET_NAME_YAHOO: (1000, len(YAHOO_HEADERS)),
 }
+
+
+@dataclass(frozen=True)
+class BatchSummary:
+    batch_prefix: str
+    batch_id: str
+    total_count: int
+    approved_count: int
+    needs_review_count: int
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    review_item_key: str
+    batch_prefix: str
+    batch_id: str
+    product_code: str
+    review_status: str
+    file_path: str
+    reason: str
+    suggested_action: str
+    approved_at: str
+    title: str
+    description: str
+    first_image_url: str
 
 
 def phase1_sheets_enabled() -> bool:
@@ -100,6 +133,48 @@ def dict_row_to_list(headers: list[str], row: dict[str, str]) -> list[str]:
     return [row.get(header, "") for header in headers]
 
 
+def list_row_to_dict(headers: list[str], row: list[str]) -> dict[str, str]:
+    return {
+        header: row[index] if index < len(row) else ""
+        for index, header in enumerate(headers)
+    }
+
+
+def normalize_batch_prefix(batch_id_or_prefix: str) -> str:
+    value = batch_id_or_prefix.strip().strip("/")
+    if not value:
+        return ""
+    if value.startswith("exports/"):
+        return value
+    return f"exports/{value}"
+
+
+def batch_id_from_prefix(batch_prefix: str) -> str:
+    prefix = batch_prefix.strip("/")
+    return prefix.removeprefix("exports/")
+
+
+def row_value(row: list[str], header: str) -> str:
+    if header not in MERCARI_HEADERS:
+        return ""
+    index = MERCARI_HEADERS.index(header)
+    return row[index] if len(row) > index else ""
+
+
+def first_image_url_from_list_row(row: list[str]) -> str:
+    for header, value in zip(MERCARI_HEADERS, row):
+        if header.startswith(MERCARI_IMAGE_HEADER_PREFIX) and value:
+            return value
+    return ""
+
+
+def list_rows_to_csv_text(rows: list[list[str]]) -> str:
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerows(rows)
+    return output.getvalue()
+
+
 def worksheet_contains_value(worksheet, column_number: int, value: str) -> bool:
     if not value:
         return False
@@ -135,6 +210,15 @@ def append_row_if_missing_by_value(
     return True
 
 
+def update_worksheet_row(worksheet, row_number: int, row: list[str], column_count: int) -> None:
+    end_column = column_letter(column_count)
+    worksheet.update(
+        values=[row],
+        range_name=f"A{row_number}:{end_column}{row_number}",
+        value_input_option="USER_ENTERED",
+    )
+
+
 def first_url_value(row: dict[str, str]) -> str:
     for value in row.values():
         if isinstance(value, str) and value.startswith("https://storage.googleapis.com/"):
@@ -148,6 +232,177 @@ def batch_prefix_from_folder(folder_path: str) -> str:
 
 def review_item_key(batch_prefix: str, product_code: str) -> str:
     return f"{batch_prefix.strip('/')}/{product_code}" if batch_prefix else product_code
+
+
+def review_row_to_dict(row: list[str]) -> dict[str, str]:
+    return {
+        header: row[index] if index < len(row) else ""
+        for index, header in enumerate(REVIEW_SHEET_HEADERS)
+    }
+
+
+def review_rows_for_batch(review_sheet, batch_prefix: str) -> list[dict[str, str]]:
+    values = worksheet_values(review_sheet)
+    if not values:
+        return []
+    prefix = normalize_batch_prefix(batch_prefix)
+    rows = []
+    for row in values[1:]:
+        record = review_row_to_dict(row)
+        if record["review_item_key"].strip().startswith(f"{prefix}/"):
+            rows.append(record)
+    return rows
+
+
+def draft_rows_by_key(draft_sheet, review_keys: set[str]) -> dict[str, list[str]]:
+    rows_by_key: dict[str, list[str]] = {}
+    for row in worksheet_values(draft_sheet)[1:]:
+        for key in review_keys:
+            if draft_row_matches_review_key(row, key):
+                rows_by_key[key] = row
+    return rows_by_key
+
+
+def list_batch_summaries() -> list[BatchSummary]:
+    spreadsheet = get_spreadsheet()
+    review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
+    ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
+
+    summaries: dict[str, dict[str, int]] = {}
+    for row in worksheet_values(review_sheet)[1:]:
+        record = review_row_to_dict(row)
+        batch_prefix = normalize_batch_prefix(record.get("batch_prefix", ""))
+        if not batch_prefix:
+            key = record.get("review_item_key", "")
+            batch_prefix = os.path.dirname(key)
+        if not batch_prefix:
+            continue
+        status = record.get("review_status", "").strip().lower()
+        counters = summaries.setdefault(
+            batch_prefix,
+            {"total": 0, "approved": 0, "needs_review": 0},
+        )
+        counters["total"] += 1
+        if status == REVIEW_STATUS_APPROVED:
+            counters["approved"] += 1
+        else:
+            counters["needs_review"] += 1
+
+    return [
+        BatchSummary(
+            batch_prefix=batch_prefix,
+            batch_id=batch_id_from_prefix(batch_prefix),
+            total_count=counters["total"],
+            approved_count=counters["approved"],
+            needs_review_count=counters["needs_review"],
+        )
+        for batch_prefix, counters in sorted(summaries.items(), reverse=True)
+    ]
+
+
+def list_review_items(batch_id_or_prefix: str) -> list[ReviewItem]:
+    spreadsheet = get_spreadsheet()
+    draft_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_DRAFT_MERCARI)
+    review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
+    ensure_sheet_header(draft_sheet, MERCARI_HEADERS)
+    ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    review_records = review_rows_for_batch(review_sheet, batch_prefix)
+    draft_by_key = draft_rows_by_key(
+        draft_sheet,
+        {record["review_item_key"] for record in review_records},
+    )
+    items = []
+    for record in review_records:
+        key = record["review_item_key"]
+        draft_row = draft_by_key.get(key, [])
+        items.append(
+            ReviewItem(
+                review_item_key=key,
+                batch_prefix=batch_prefix,
+                batch_id=batch_id_from_prefix(batch_prefix),
+                product_code=record.get("product_code", ""),
+                review_status=record.get("review_status", ""),
+                file_path=record.get("file_path", ""),
+                reason=record.get("reason", ""),
+                suggested_action=record.get("suggested_action", ""),
+                approved_at=record.get("approved_at", ""),
+                title=row_value(draft_row, MERCARI_TITLE_HEADER),
+                description=row_value(draft_row, MERCARI_DESCRIPTION_HEADER),
+                first_image_url=first_image_url_from_list_row(draft_row),
+            )
+        )
+    return items
+
+
+def find_review_row_number(review_sheet, review_key: str) -> tuple[int, list[str]] | None:
+    for index, row in enumerate(worksheet_values(review_sheet)[1:], start=2):
+        record = review_row_to_dict(row)
+        if record.get("review_item_key", "").strip() == review_key:
+            return index, row
+    return None
+
+
+def find_draft_row_number(draft_sheet, review_key: str) -> tuple[int, list[str]] | None:
+    for index, row in enumerate(worksheet_values(draft_sheet)[1:], start=2):
+        if draft_row_matches_review_key(row, review_key):
+            return index, row
+    return None
+
+
+def get_review_item(batch_id_or_prefix: str, product_code: str) -> tuple[dict[str, str], dict[str, str]]:
+    spreadsheet = get_spreadsheet()
+    draft_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_DRAFT_MERCARI)
+    review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
+    ensure_sheet_header(draft_sheet, MERCARI_HEADERS)
+    ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    key = review_item_key(batch_prefix, product_code)
+    review_match = find_review_row_number(review_sheet, key)
+    draft_match = find_draft_row_number(draft_sheet, key)
+    if review_match is None or draft_match is None:
+        raise KeyError(key)
+    return (
+        review_row_to_dict(review_match[1]),
+        list_row_to_dict(MERCARI_HEADERS, draft_match[1]),
+    )
+
+
+def update_draft_item(batch_id_or_prefix: str, product_code: str, updates: dict[str, str]) -> None:
+    spreadsheet = get_spreadsheet()
+    draft_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_DRAFT_MERCARI)
+    ensure_sheet_header(draft_sheet, MERCARI_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    key = review_item_key(batch_prefix, product_code)
+    match = find_draft_row_number(draft_sheet, key)
+    if match is None:
+        raise KeyError(key)
+    row_number, row = match
+    updated_row = [row[index] if index < len(row) else "" for index in range(len(MERCARI_HEADERS))]
+    for header, value in updates.items():
+        if header in MERCARI_HEADERS:
+            updated_row[MERCARI_HEADERS.index(header)] = value
+    update_worksheet_row(draft_sheet, row_number, updated_row, len(MERCARI_HEADERS))
+
+
+def approve_review_item(batch_id_or_prefix: str, product_code: str, approved_at: str) -> None:
+    spreadsheet = get_spreadsheet()
+    review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
+    ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    key = review_item_key(batch_prefix, product_code)
+    match = find_review_row_number(review_sheet, key)
+    if match is None:
+        raise KeyError(key)
+    row_number, row = match
+    updated_row = [row[index] if index < len(row) else "" for index in range(len(REVIEW_SHEET_HEADERS))]
+    updated_row[REVIEW_SHEET_HEADERS.index("review_status")] = REVIEW_STATUS_APPROVED
+    updated_row[REVIEW_SHEET_HEADERS.index("approved_at")] = approved_at
+    update_worksheet_row(review_sheet, row_number, updated_row, len(REVIEW_SHEET_HEADERS))
 
 
 def build_review_sheet_row(
@@ -275,14 +530,14 @@ def draft_row_matches_review_key(row: list[str], review_key: str) -> bool:
     )
 
 
-def export_approved_mercari_rows(batch_prefix: str) -> int:
-    spreadsheet = get_spreadsheet()
+def build_approved_mercari_sheet_rows(batch_prefix: str, spreadsheet=None) -> list[list[str]] | None:
+    if spreadsheet is None:
+        spreadsheet = get_spreadsheet()
     draft_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_DRAFT_MERCARI)
     review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
-    approved_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_APPROVED_MERCARI)
 
     if not review_item_keys_for_batch(review_sheet, batch_prefix):
-        return -1
+        return None
 
     approved_keys = approved_review_item_keys(review_sheet, batch_prefix)
     approved_rows = [
@@ -291,5 +546,20 @@ def export_approved_mercari_rows(batch_prefix: str) -> int:
         if row != MERCARI_HEADERS
         and any(draft_row_matches_review_key(row, key) for key in approved_keys)
     ]
-    replace_sheet_rows(approved_sheet, [MERCARI_HEADERS, *approved_rows], len(MERCARI_HEADERS))
-    return len(approved_rows)
+    return [MERCARI_HEADERS, *approved_rows]
+
+
+def export_approved_mercari_rows_and_csv(batch_prefix: str) -> tuple[int, str]:
+    spreadsheet = get_spreadsheet()
+    approved_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_APPROVED_MERCARI)
+    rows = build_approved_mercari_sheet_rows(batch_prefix, spreadsheet)
+    if rows is None:
+        return -1, ""
+
+    replace_sheet_rows(approved_sheet, rows, len(MERCARI_HEADERS))
+    return len(rows) - 1, list_rows_to_csv_text(rows)
+
+
+def export_approved_mercari_rows(batch_prefix: str) -> int:
+    exported_count, _ = export_approved_mercari_rows_and_csv(batch_prefix)
+    return exported_count
