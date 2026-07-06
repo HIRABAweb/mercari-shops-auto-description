@@ -19,11 +19,13 @@ from csv_export import (
     MERCARI_IMAGE_LIMIT,
     MERCARI_HEADERS,
     REVIEW_REQUIRED_HEADERS,
+    MISSING_PRODUCT_INFO_REASON,
     YAHOO_HEADERS,
     build_csv_text,
     build_export_rows,
     validate_mercari_headers,
 )
+from description_guard import REVIEW_REASON_ASSERTIVE_DESCRIPTION
 
 
 def test_export_rows_use_official_mercari_column_names_and_include_ids_and_size():
@@ -32,8 +34,10 @@ def test_export_rows_use_official_mercari_column_names_and_include_ids_and_size(
     rows = build_export_rows(
         image_urls=image_urls,
         product_code="A0001",
-        title="美品 D&G ジャケット 46",
-        description="説明\n\nサイズ: 46",
+        title="メルカリ用 D&G ジャケット 46",
+        description="メルカリ用説明文",
+        yahoo_title="ヤフオク用 D&G ジャケット 46",
+        yahoo_description_html="<p>ヤフオク用HTML説明文</p>",
         attributes=attributes,
         brand_match=BrandMatch(brand_id="123", brand_name="Dolce&Gabbana"),
         category_match=CategoryMatch(category_id="456", category_name="ジャケット"),
@@ -41,16 +45,33 @@ def test_export_rows_use_official_mercari_column_names_and_include_ids_and_size(
 
     assert rows.mercari_row["商品画像名_1"] == image_urls[0]
     assert rows.mercari_row["商品画像名_2"] == image_urls[1]
-    assert rows.mercari_row["商品名"] == "美品 D&G ジャケット 46"
-    assert rows.mercari_row["商品説明"] == "説明\n\nサイズ: 46"
+    assert rows.mercari_row["商品名"] == "メルカリ用 D&G ジャケット 46"
+    assert rows.mercari_row["商品説明"] == "メルカリ用説明文"
     assert rows.mercari_row["ブランドID"] == "123"
     assert rows.mercari_row["カテゴリID"] == "456"
     assert rows.mercari_row["SKU1_種類"] == "46"
     assert rows.mercari_row["商品ステータス"] == "1"
-    assert rows.yahoo_row["タイトル"] == "美品 D&G ジャケット 46 (管理コード: A0001)"
-    assert rows.yahoo_row["説明"] == "説明<br><br>サイズ: 46"
+    assert rows.yahoo_row["タイトル"] == "ヤフオク用 D&G ジャケット 46 (管理コード: A0001)"
+    assert rows.yahoo_row["説明"] == "<p>ヤフオク用HTML説明文</p>"
     assert rows.yahoo_row["画像1"] == image_urls[0]
     assert rows.yahoo_row["画像2"] == image_urls[1]
+
+
+def test_yahoo_html_description_is_not_newline_converted():
+    attributes = ProductAttributes(description="説明", item_type="ジャケット", size="46")
+    rows = build_export_rows(
+        image_urls=[],
+        product_code="A0001",
+        title="メルカリ商品名",
+        description="メルカリ説明",
+        yahoo_title="ヤフオク商品名",
+        yahoo_description_html="<p>1行目</p>\n<p>2行目</p>",
+        attributes=attributes,
+        brand_match=BrandMatch(brand_id="123", brand_name="Dolce&Gabbana"),
+        category_match=CategoryMatch(category_id="456", category_name="ジャケット"),
+    )
+
+    assert rows.yahoo_row["説明"] == "<p>1行目</p>\n<p>2行目</p>"
 
 
 def test_mercari_image_columns_preserve_urls_in_order_and_limit_to_20():
@@ -101,6 +122,83 @@ def test_review_required_rows_include_only_review_items():
     ]
     assert rows.mercari_row["商品画像名_1"] == ""
     assert rows.yahoo_row["画像1"] == ""
+
+
+def test_description_with_bihin_is_written_to_review_required_rows():
+    rows = build_export_rows(
+        image_urls=[],
+        product_code="ABC001",
+        title="D&G ダウンジャケット",
+        description="全体的に美品です。",
+        attributes=ProductAttributes(description="全体的に美品です。"),
+        brand_match=BrandMatch(brand_id="123", brand_name="Dolce&Gabbana"),
+        category_match=CategoryMatch(category_id="456", category_name="ジャケット"),
+        description_review_terms=["美品"],
+    )
+
+    assert rows.review_rows == [
+        {
+            "商品管理コード": "ABC001",
+            "確認項目": "商品説明",
+            "候補1": "美品",
+            "候補2": "",
+            "理由": REVIEW_REASON_ASSERTIVE_DESCRIPTION,
+        }
+    ]
+
+
+def test_description_with_shinpindoyo_is_written_to_review_required_rows():
+    rows = build_export_rows(
+        image_urls=[],
+        product_code="ABC001",
+        title="D&G ダウンジャケット",
+        description="新品同様のコンディションです。",
+        attributes=ProductAttributes(description="新品同様のコンディションです。"),
+        brand_match=BrandMatch(brand_id="123", brand_name="Dolce&Gabbana"),
+        category_match=CategoryMatch(category_id="456", category_name="ジャケット"),
+        description_review_terms=["新品同様"],
+    )
+
+    assert rows.review_rows[0]["確認項目"] == "商品説明"
+    assert rows.review_rows[0]["候補1"] == "新品同様"
+
+
+def test_description_without_guard_terms_does_not_add_review_row():
+    rows = build_export_rows(
+        image_urls=[],
+        product_code="ABC001",
+        title="D&G ダウンジャケット",
+        description="右袖口に軽いスレがあります。",
+        attributes=ProductAttributes(description="右袖口に軽いスレがあります。"),
+        brand_match=BrandMatch(brand_id="123", brand_name="Dolce&Gabbana"),
+        category_match=CategoryMatch(category_id="456", category_name="ジャケット"),
+        description_review_terms=[],
+    )
+
+    assert rows.review_rows == []
+
+
+def test_missing_success_text_adds_review_required_row():
+    rows = build_export_rows(
+        image_urls=[],
+        product_code="ABC001",
+        title="D&G ダウンジャケット",
+        description="【要確認：採寸情報なし】\n説明",
+        attributes=ProductAttributes(description="説明"),
+        brand_match=BrandMatch(brand_id="123", brand_name="Dolce&Gabbana"),
+        category_match=CategoryMatch(category_id="456", category_name="ジャケット"),
+        product_info_missing=True,
+    )
+
+    assert rows.review_rows == [
+        {
+            "商品管理コード": "ABC001",
+            "確認項目": "商品情報",
+            "候補1": "",
+            "候補2": "",
+            "理由": MISSING_PRODUCT_INFO_REASON,
+        }
+    ]
 
 
 def test_build_csv_text_writes_header_and_preserves_japanese_commas_and_newlines():

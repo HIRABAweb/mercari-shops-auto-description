@@ -179,6 +179,22 @@ class MainCsvExportTest(unittest.TestCase):
             ):
                 self.module.get_prompt_from_gcs()
 
+    def test_missing_mercari_prompt_file_env_fails_clearly(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROJECT_ID": "sample-project",
+                "SECRET_NAME": "gemini-api-key",
+                "PROMPT_BUCKET_NAME": "prompt-bucket",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ConfigurationError,
+                "必須環境変数 MERCARI_PROMPT_FILE_NAME が未設定",
+            ):
+                self.module.get_mercari_prompt_from_gcs()
+
     def test_missing_model_env_fails_clearly(self):
         with patch.dict(
             os.environ,
@@ -283,9 +299,78 @@ class MainCsvExportTest(unittest.TestCase):
         result_json = bucket.blobs[outputs["result_json"]].upload_calls[0][0]
         self.assertEqual(json.loads(result_json)["outputs"], outputs)
 
+    def test_dual_listing_uses_fixed_yahoo_and_mercari_content_without_python_regeneration(self):
+        bucket = FakeBucket()
+        bucket.source.text = (
+            "タイトル: ヤフオク用 D&G ダウンジャケット 46\n"
+            "説明文（HTML）: <p>美品として訴求するヤフオク用HTML説明文</p>"
+        )
+        self.module.storage_client = FakeStorageClient(bucket)
+        self.module.generate_product_attributes = lambda description: self.module.ProductAttributes(
+            description="属性抽出用説明",
+            brand_name="D&G",
+            category_name="ジャケット",
+            item_type="ダウンジャケット",
+            size="46",
+            confidence={"category_name": 0.9},
+        )
+        self.module.generate_mercari_listing_content = lambda title, html: self.module.MercariListingContent(
+            mercari_title="メルカリ用 D&G ダウンジャケット サイズ46",
+            mercari_body="メルカリ用商品説明文",
+        )
+        self.module.load_brand_records = lambda bucket: []
+        self.module.load_category_records = lambda bucket: []
+        self.module.resolve_brand = lambda brand_name, records: types.SimpleNamespace(
+            brand_id="123",
+            brand_name="Dolce&Gabbana",
+            review_required=False,
+            candidates=[],
+            reason="",
+        )
+        self.module.resolve_category = lambda *args, **kwargs: types.SimpleNamespace(
+            category_id="456",
+            category_name="ジャケット",
+            review_required=False,
+            candidates=[],
+            reason="",
+        )
+        self.module.build_title = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_title must not be called")
+        )
+        self.module.ensure_size_in_description = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("ensure_size_in_description must not be called")
+        )
+        event = types.SimpleNamespace(
+            data={
+                "bucket": "product-images",
+                "name": "A0001/item_description.txt",
+                "generation": "123",
+            }
+        )
+
+        self.module.generate_dual_listing(event)
+
+        mercari_csv = bucket.blobs["exports/A0001/mercari.csv"].upload_calls[0][0]
+        yahoo_csv = bucket.blobs["exports/A0001/yahoo.csv"].upload_calls[0][0]
+        self.assertIn("メルカリ用 D&G ダウンジャケット サイズ46", mercari_csv)
+        self.assertIn("メルカリ用商品説明文", mercari_csv)
+        self.assertIn("ヤフオク用 D&G ダウンジャケット 46 (管理コード: A0001)", yahoo_csv)
+        self.assertIn("<p>美品として訴求するヤフオク用HTML説明文</p>", yahoo_csv)
+        self.assertNotIn("属性抽出用説明", mercari_csv)
+        review_csv = bucket.blobs["exports/A0001/review_required.csv"].upload_calls[0][0]
+        self.assertNotIn("商品説明", review_csv)
+
     def test_failure_keeps_source_and_releases_lock_for_retry(self):
         bucket = FakeBucket()
+        bucket.source.text = (
+            "タイトル: ヤフオク用 D&G ダウンジャケット 46\n"
+            "説明文（HTML）: <p>ヤフオク用HTML説明文</p>"
+        )
         self.module.storage_client = FakeStorageClient(bucket)
+        self.module.generate_mercari_listing_content = lambda title, html: self.module.MercariListingContent(
+            mercari_title="メルカリ用タイトル",
+            mercari_body="メルカリ用本文",
+        )
         self.module.generate_product_attributes = lambda description: (_ for _ in ()).throw(
             RuntimeError("Gemini unavailable")
         )

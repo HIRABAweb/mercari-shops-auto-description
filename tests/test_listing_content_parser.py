@@ -14,6 +14,7 @@ MODULE_DIR = Path(__file__).resolve().parents[1] / "yahuoku-to-mercarishops"
 sys.path.insert(0, str(MODULE_DIR))
 
 import ai_service
+import description_guard
 import title_builder
 
 
@@ -100,7 +101,59 @@ def test_python_builds_title_without_ai_title():
         condition="美品",
     )
 
-    assert title_builder.build_title(attributes) == "美品 D&G ダウンジャケット ブラック 46"
+    assert title_builder.build_title(attributes) == "D&G ダウンジャケット ブラック 46"
+
+
+def test_title_does_not_include_condition():
+    attributes = ai_service.ProductAttributes(
+        description="説明文です。",
+        brand_name="D&G",
+        item_type="ダウンジャケット",
+        material="ナイロン",
+        color="ブラック",
+        pattern="無地",
+        size="サイズ46",
+        condition="美品",
+    )
+
+    title = title_builder.build_title(attributes)
+
+    assert title == "D&G ダウンジャケット ナイロン ブラック 無地 サイズ46"
+    assert "美品" not in title
+    assert not title.startswith("美品 D&G")
+
+
+def test_title_removes_unsafe_condition_terms_from_parts():
+    attributes = ai_service.ProductAttributes(
+        description="説明文です。",
+        brand_name="D&G",
+        item_type="美品 ダウンジャケット",
+        color="汚れなし ブラック",
+    )
+
+    assert title_builder.build_title(attributes) == "D&G ダウンジャケット ブラック"
+
+
+def test_title_builds_in_brand_item_material_color_pattern_size_order():
+    attributes = ai_service.ProductAttributes(
+        description="説明文です。",
+        brand_name="D&G",
+        item_type="ダウンジャケット",
+        material="ナイロン",
+        color="ブラック",
+        pattern="無地",
+        size="サイズ46",
+    )
+
+    assert title_builder.build_title(attributes) == "D&G ダウンジャケット ナイロン ブラック 無地 サイズ46"
+
+
+def test_description_guard_detects_prohibited_terms():
+    assert description_guard.detect_prohibited_expressions("新品同様の美品です。") == [
+        "新品同様",
+        "美品",
+    ]
+    assert description_guard.detect_prohibited_expressions("右袖口に軽いスレあり。") == []
 
 
 def test_description_gets_size_when_missing():
