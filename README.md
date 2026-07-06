@@ -321,7 +321,7 @@ Googleスプレッドシート
 - "Approved_Mercari_CSV"
 - "Yahoo_List"
 
-`Draft_Mercari_List` はAIが生成したメルカリShops用73列データの下書きです。運用者はこのシート上で商品名、説明文、カテゴリID、ブランドID、価格などを確認・修正します。1行目には、リポジトリ内の `listing_data.py` で管理するメルカリShops用CSVヘッダーを自動出力します。
+`Draft_Mercari_List` はAIが生成したメルカリShops用73列データの下書きです。運用者はこのシート上で商品名、説明文、カテゴリID、ブランドID、価格などを確認・修正します。1行目には、リポジトリ内の `listing_data.py` で管理するメルカリShops用CSVヘッダーを自動出力します。再実行時の重複判定は先頭の商品画像URLを使うため、別batchで同じ商品管理コードを使っても、画像URLが異なれば別商品として下書き行を作成できます。
 
 `Review_List` は、商品ごとの確認理由と承認状態を管理するシートです。`review_status` を `approved` にした商品だけが、最終アップロード用の `Approved_Mercari_CSV` に出力されます。`needs_review`、`hold`、`rejected` の商品は最終CSVに出しません。
 
@@ -341,7 +341,7 @@ Googleスプレッドシート
 
 review集約CSVは、対象prefix内で画像があるすべての商品フォルダに `_SUCCESS.txt` が存在する場合だけ生成します。また、集約対象は `_processed.txt` が作成済みの処理完了商品だけです。これにより、アップロード途中の商品や、Google Sheets追記・processed化が完了していない商品のreview行が単一CSVへ混ざることを防ぎます。
 
-承認済みメルカリShops用CSVの生成は、`export_approved_mercari_csv` entrypointから実行します。このentrypointはHTTP Functionとしてデプロイし、必要なタイミングで手動実行または管理用ボタンから呼び出す運用を想定しています。複数batchが混ざらないよう `?batch_prefix=exports/{batch_id}` は必須です。指定したbatchのreview行が存在しない場合は、既存の `Approved_Mercari_CSV` を消さずにエラー終了します。
+承認済みメルカリShops用CSVの生成は、`export_approved_mercari_csv` entrypointから実行します。このentrypointはHTTP Functionとしてデプロイし、必要なタイミングで手動実行または管理用ボタンから呼び出す運用を想定しています。複数batchが混ざらないよう `?batch_prefix=exports/{batch_id}` は必須です。指定したbatchのreview行が存在しない場合は、既存の `Approved_Mercari_CSV` を消さずにエラー終了します。再生成時は既存シートを先に消さず、承認済み行の書き込みが成功してから余剰の旧行だけをクリアします。
 
 本番のCloud Functionsは、次のentrypointで運用します。Cloud Functions Gen2では、entrypointごとにCloud Functionsリソースをデプロイし、対応するCloud Runサービスはデプロイ時に作成されます。
 
@@ -583,7 +583,7 @@ Google Cloud
 
 メルカリShops向けデータは、公式の一括登録用CSVフォーマットを前提としています。
 
-メルカリShops用CSVのヘッダー行は、`yahuoku-to-mercarishops/listing_data.py` の `MERCARI_HEADERS` に固定しています。これは「実行時に外部テンプレートを取りに行かず、リポジトリ内の定義を正とする」という意味です。公式テンプレートが変更された場合は、`MERCARI_HEADERS` と対応する列マッピングをPRで更新します。
+メルカリShops用CSVのヘッダー行は、`yahuoku-to-mercarishops/listing_data.py` の `MERCARI_HEADERS` に固定しています。固定元のテンプレートヘッダーは `yahuoku-to-mercarishops/resources/mercari/product_import_template_sample.csv` に保存しています。これは「実行時に外部テンプレートを取りに行かず、リポジトリ内の定義を正とする」という意味です。公式テンプレートが変更された場合は、テンプレートCSV、`MERCARI_HEADERS`、対応する列マッピングを同じPRで更新します。
 
 商品画像については、Google Cloud Storage上の公開URLを商品画像欄へ設定します。商品画像の順番は、画像ファイル名に付与した数字を基準に制御します。
 

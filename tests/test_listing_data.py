@@ -1,5 +1,6 @@
 """Regression tests for platform CSV-row construction."""
 
+import csv
 import importlib.util
 import unittest
 from pathlib import Path
@@ -9,6 +10,13 @@ MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "yahuoku-to-mercarishops"
     / "listing_data.py"
+)
+TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "yahuoku-to-mercarishops"
+    / "resources"
+    / "mercari"
+    / "product_import_template_sample.csv"
 )
 SPEC = importlib.util.spec_from_file_location("listing_data", MODULE_PATH)
 listing_data = importlib.util.module_from_spec(SPEC)
@@ -32,6 +40,13 @@ class ListingDataTest(unittest.TestCase):
         self.assertEqual(listing_data.MERCARI_HEADERS[63], "販売価格")
         self.assertEqual(listing_data.MERCARI_HEADERS[64], "カテゴリID")
         self.assertEqual(listing_data.MERCARI_HEADERS[72], "メルカリBiz配送_クール区分")
+
+    def test_mercari_headers_match_repository_template(self):
+        with TEMPLATE_PATH.open(encoding="utf-8-sig", newline="") as template_file:
+            template_headers = next(csv.reader(template_file))
+
+        self.assertEqual(template_headers, listing_data.MERCARI_HEADERS)
+        self.assertEqual(len(template_headers), listing_data.MERCARI_COLUMN_COUNT)
 
     def test_image_urls_are_number_sorted_and_unsupported_files_are_excluded(self):
         blobs = [Blob("A0001/010.jpg"), Blob("A0001/readme.txt"), Blob("A0001/002.png")]

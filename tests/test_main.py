@@ -141,12 +141,21 @@ class FakeStorageClient:
 
 
 class FakeWorksheet:
-    def __init__(self, existing_values=None, values=None, title="Sheet1"):
+    def __init__(
+        self,
+        existing_values=None,
+        values=None,
+        title="Sheet1",
+        update_error=None,
+    ):
         self.title = title
         self.existing_values = existing_values or {}
         self.values = values or []
+        self.update_error = update_error
         self.appended_rows = []
         self.appended_row_batches = []
+        self.update_calls = []
+        self.batch_clear_calls = []
         self.clear_calls = 0
 
     def col_values(self, column_number):
@@ -162,6 +171,37 @@ class FakeWorksheet:
     def append_rows(self, rows, **kwargs):
         self.appended_row_batches.append((rows, kwargs))
         self.values.extend(rows)
+
+    def update(self, values=None, range_name=None, **kwargs):
+        if self.update_error:
+            raise self.update_error
+        self.update_calls.append((range_name, values, kwargs))
+        start_row = 1
+        if range_name and range_name.startswith("A") and range_name != "A1":
+            digits = []
+            for character in range_name[1:]:
+                if character.isdigit():
+                    digits.append(character)
+                else:
+                    break
+            if digits:
+                start_row = int("".join(digits))
+        start_index = start_row - 1
+        while len(self.values) < start_index:
+            self.values.append([])
+        for offset, row in enumerate(values or []):
+            row_index = start_index + offset
+            if row_index < len(self.values):
+                self.values[row_index] = row
+            else:
+                self.values.append(row)
+
+    def batch_clear(self, ranges):
+        self.batch_clear_calls.append(ranges)
+        for range_name in ranges:
+            start = range_name.split(":", maxsplit=1)[0]
+            if start.startswith("A") and start[1:].isdigit():
+                self.values = self.values[: int(start[1:]) - 1]
 
     def get_all_values(self):
         return self.values
@@ -246,12 +286,16 @@ class MainSafeguardTest(unittest.TestCase):
 
     def test_append_listing_rows_is_idempotent_for_existing_sheets(self):
         mercari_row = [""] * 73
+        mercari_row[0] = "https://storage.googleapis.com/product-images/A0001/001.jpg"
         mercari_row[self.module.MERCARI_SKU_CODE] = "A0001"
         yahoo_row = [""] * 114
         yahoo_row[self.module.YAHOO_IMAGE_START] = (
             "https://storage.googleapis.com/product-images/A0001/001.jpg"
         )
         existing_mercari_row = [""] * 73
+        existing_mercari_row[0] = (
+            "https://storage.googleapis.com/product-images/A0001/001.jpg"
+        )
         existing_mercari_row[self.module.MERCARI_SKU_CODE] = "A0001"
         mercari_sheet = FakeWorksheet(
             values=[self.module.MERCARI_HEADERS, existing_mercari_row]
@@ -272,12 +316,16 @@ class MainSafeguardTest(unittest.TestCase):
 
     def test_append_listing_rows_appends_missing_rows(self):
         mercari_row = [""] * 73
+        mercari_row[0] = "https://storage.googleapis.com/product-images/B0001/001.jpg"
         mercari_row[self.module.MERCARI_SKU_CODE] = "B0001"
         yahoo_row = [""] * 114
         yahoo_row[self.module.YAHOO_IMAGE_START] = (
             "https://storage.googleapis.com/product-images/B0001/001.jpg"
         )
         existing_mercari_row = [""] * 73
+        existing_mercari_row[0] = (
+            "https://storage.googleapis.com/product-images/A0001/001.jpg"
+        )
         existing_mercari_row[self.module.MERCARI_SKU_CODE] = "A0001"
         mercari_sheet = FakeWorksheet(
             values=[self.module.MERCARI_HEADERS, existing_mercari_row]
@@ -295,6 +343,31 @@ class MainSafeguardTest(unittest.TestCase):
 
         self.assertEqual(mercari_sheet.appended_rows, [mercari_row])
         self.assertEqual(yahoo_sheet.appended_rows, [yahoo_row])
+
+    def test_append_listing_rows_allows_same_item_code_in_different_batch(self):
+        mercari_row = [""] * 73
+        mercari_row[0] = (
+            "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg"
+        )
+        mercari_row[self.module.MERCARI_SKU_CODE] = "A0001"
+        yahoo_row = [""] * 114
+        yahoo_row[self.module.YAHOO_IMAGE_START] = (
+            "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg"
+        )
+        existing_mercari_row = [""] * 73
+        existing_mercari_row[0] = (
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001.jpg"
+        )
+        existing_mercari_row[self.module.MERCARI_SKU_CODE] = "A0001"
+        mercari_sheet = FakeWorksheet(
+            values=[self.module.MERCARI_HEADERS, existing_mercari_row]
+        )
+        yahoo_sheet = FakeWorksheet()
+        self.module.get_worksheets = lambda: (mercari_sheet, yahoo_sheet)
+
+        self.module.append_listing_rows(mercari_row, yahoo_row, "A0001")
+
+        self.assertEqual(mercari_sheet.appended_rows, [mercari_row])
 
     def test_append_listing_rows_creates_draft_mercari_header_on_empty_sheet(self):
         mercari_row = [""] * 73
@@ -471,8 +544,35 @@ class MainSafeguardTest(unittest.TestCase):
         )
 
         self.assertEqual(exported_count, 1)
-        self.assertEqual(approved_sheet.clear_calls, 1)
+        self.assertEqual(approved_sheet.clear_calls, 0)
         self.assertEqual(approved_sheet.values, [self.module.MERCARI_HEADERS, draft_row_a])
+
+    def test_export_approved_mercari_rows_preserves_existing_sheet_when_update_fails(self):
+        draft_row = [""] * 73
+        draft_row[0] = "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001.jpg"
+        draft_row[self.module.MERCARI_SKU_CODE] = "A0001"
+        draft_sheet = FakeWorksheet(values=[draft_row])
+        review_sheet = FakeWorksheet(
+            values=[
+                self.module.REVIEW_SHEET_HEADERS,
+                ["exports/2026-07-06/A0001", "exports/2026-07-06", "A0001", "approved"],
+            ]
+        )
+        approved_sheet = FakeWorksheet(
+            values=[["existing export"]],
+            update_error=RuntimeError("Sheets unavailable"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Sheets unavailable"):
+            self.module.export_approved_mercari_rows(
+                draft_sheet,
+                review_sheet,
+                approved_sheet,
+                batch_prefix="exports/2026-07-06",
+            )
+
+        self.assertEqual(approved_sheet.clear_calls, 0)
+        self.assertEqual(approved_sheet.values, [["existing export"]])
 
     def test_export_approved_mercari_rows_filters_same_item_id_by_batch(self):
         draft_row_a = [""] * 73
@@ -502,27 +602,14 @@ class MainSafeguardTest(unittest.TestCase):
         self.assertEqual(approved_sheet.values, [self.module.MERCARI_HEADERS, draft_row_a])
 
     def test_export_approved_mercari_csv_http_entrypoint_requires_batch_prefix(self):
-        draft_row = [""] * 73
-        draft_row[self.module.MERCARI_SKU_CODE] = "A0001"
-        draft_sheet = FakeWorksheet(values=[draft_row])
-        review_sheet = FakeWorksheet(
-            values=[
-                self.module.REVIEW_SHEET_HEADERS,
-                ["A0001", "", "A0001", "approved"],
-            ]
-        )
-        approved_sheet = FakeWorksheet()
-        self.module.get_approved_mercari_worksheets = lambda: (
-            draft_sheet,
-            review_sheet,
-            approved_sheet,
-        )
+        calls = []
+        self.module.get_approved_mercari_worksheets = lambda: calls.append("opened")
 
         body, status = self.module.export_approved_mercari_csv(FakeRequest())
 
         self.assertEqual(status, 400)
         self.assertIn("batch_prefix is required", body)
-        self.assertEqual(approved_sheet.values, [])
+        self.assertEqual(calls, [])
 
     def test_export_approved_mercari_csv_http_entrypoint_rejects_unknown_batch_without_clearing(self):
         draft_row = [""] * 73

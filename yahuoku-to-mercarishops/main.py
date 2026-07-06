@@ -14,6 +14,7 @@ from google.cloud import secretmanager, storage
 from listing_data import (
     IMAGE_EXTENSIONS,
     MERCARI_HEADERS,
+    MERCARI_IMAGE_START,
     REVIEW_REQUIRED_HEADERS,
     SUCCESS_FILE_NAME,
     MERCARI_SKU_CODE,
@@ -51,7 +52,7 @@ PROCESSED_FILE_NAME = "_processed.txt"
 PROCESSING_LOCK_FILE_NAME = "_processing.lock"
 REVIEW_REQUIRED_FILE_NAME = "review_required.csv"
 REVIEW_REQUIRED_DIR = "review_required"
-MERCARI_IDEMPOTENCY_COLUMN = MERCARI_SKU_CODE + 1
+MERCARI_DRAFT_IDEMPOTENCY_COLUMN = MERCARI_IMAGE_START + 1
 YAHOO_IDEMPOTENCY_COLUMN = YAHOO_IMAGE_START + 1
 REVIEW_ITEM_KEY_COLUMN = 1
 REVIEW_STATUS_COLUMN = 4
@@ -388,6 +389,36 @@ def worksheet_values(worksheet) -> list[list[str]]:
     return values or []
 
 
+def column_letter(column_number: int) -> str:
+    """Return the spreadsheet column letter for a 1-based column number."""
+    if column_number < 1:
+        raise ValueError("column_number must be positive")
+    letters = []
+    while column_number:
+        column_number, remainder = divmod(column_number - 1, 26)
+        letters.append(chr(65 + remainder))
+    return "".join(reversed(letters))
+
+
+def update_sheet_range(worksheet, range_name: str, rows: list[list[str]]) -> None:
+    """Update a worksheet range using named args supported by current gspread."""
+    worksheet.update(
+        values=rows,
+        range_name=range_name,
+        value_input_option="USER_ENTERED",
+    )
+
+
+def replace_sheet_rows(worksheet, rows: list[list[str]], column_count: int) -> None:
+    """Replace sheet contents without clearing existing data before write success."""
+    existing_row_count = len(worksheet_values(worksheet))
+    update_sheet_range(worksheet, "A1", rows)
+    if existing_row_count > len(rows):
+        worksheet.batch_clear(
+            [f"A{len(rows) + 1}:{column_letter(column_count)}{existing_row_count}"]
+        )
+
+
 def ensure_sheet_header(worksheet, headers: list[str]) -> None:
     """Create a header row when a worksheet is empty."""
     if worksheet_values(worksheet):
@@ -462,11 +493,16 @@ def append_listing_rows(
     """Append completed rows idempotently to their respective worksheets."""
     mercari_sheet, yahoo_sheet = get_worksheets()
     ensure_sheet_header(mercari_sheet, MERCARI_HEADERS)
+    mercari_key = (
+        mercari_row[MERCARI_IMAGE_START]
+        if len(mercari_row) > MERCARI_IMAGE_START
+        else ""
+    ) or item_manage_code
     append_row_if_missing(
         mercari_sheet,
         mercari_row,
-        MERCARI_IDEMPOTENCY_COLUMN,
-        item_manage_code,
+        MERCARI_DRAFT_IDEMPOTENCY_COLUMN,
+        mercari_key,
         f"メルカリ下書きシート({SHEET_NAME_DRAFT_MERCARI})",
     )
     yahoo_key = yahoo_row[YAHOO_IMAGE_START] if len(yahoo_row) > YAHOO_IMAGE_START else ""
@@ -573,10 +609,10 @@ def export_approved_mercari_rows(
         draft_sheet,
         approved_review_item_keys(review_sheet, batch_prefix=batch_prefix),
     )
-    approved_sheet.clear()
-    approved_sheet.append_rows(
+    replace_sheet_rows(
+        approved_sheet,
         [MERCARI_HEADERS, *approved_rows],
-        value_input_option="USER_ENTERED",
+        len(MERCARI_HEADERS),
     )
     print(f"SUCCESS: 承認済みメルカリShops用CSVシートへ {len(approved_rows)} 件出力しました。")
     return len(approved_rows)
@@ -593,10 +629,10 @@ def request_batch_prefix(request) -> str:
 @functions_framework.http
 def export_approved_mercari_csv(request):
     """HTTP entrypoint for rebuilding the approved Mercari Shops CSV sheet."""
-    draft_sheet, review_sheet, approved_sheet = get_approved_mercari_worksheets()
     batch_prefix = request_batch_prefix(request)
     if not batch_prefix:
         return ("batch_prefix is required\n", 400)
+    draft_sheet, review_sheet, approved_sheet = get_approved_mercari_worksheets()
     if not review_item_keys_for_batch(review_sheet, batch_prefix):
         return (f"no review rows found for {batch_prefix}\n", 404)
     exported_count = export_approved_mercari_rows(

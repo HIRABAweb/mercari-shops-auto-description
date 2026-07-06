@@ -63,14 +63,18 @@ Example:
 GET /?batch_prefix=exports/2026-07-06
 ```
 
-The function clears `Approved_Mercari_CSV` and writes only approved draft rows
-for the requested batch. If the requested batch has no rows in `Review_List`,
-the function returns an error without clearing the existing approved sheet.
+The function writes only approved draft rows for the requested batch to
+`Approved_Mercari_CSV`. It validates `batch_prefix` before opening worksheets
+and does not clear the existing approved sheet before a replacement write
+succeeds. If the requested batch has no rows in `Review_List`, the function
+returns an error without changing the existing approved sheet.
 Download `Approved_Mercari_CSV` as CSV and upload it to Mercari Shops.
 
 The Mercari Shops CSV header is fixed in `yahuoku-to-mercarishops/listing_data.py`
-as `MERCARI_HEADERS`. If the official Mercari Shops template changes, update
-that constant and the related column mapping in the same pull request.
+as `MERCARI_HEADERS`, and the repository copy of the production template header
+is `yahuoku-to-mercarishops/resources/mercari/product_import_template_sample.csv`.
+If the official Mercari Shops template changes, update the template file, that
+constant, and the related column mapping in the same pull request.
 
 ## Pre-deploy Checklist
 
