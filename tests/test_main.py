@@ -138,8 +138,9 @@ class FakeStorageClient:
 
 
 class FakeRequest:
-    def __init__(self, args=None):
+    def __init__(self, args=None, method="POST"):
         self.args = args or {}
+        self.method = method
 
 
 class MainCsvExportTest(unittest.TestCase):
@@ -322,6 +323,18 @@ class MainCsvExportTest(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("batch_prefix is required", body)
+
+    def test_export_approved_mercari_csv_rejects_get(self):
+        self.module.export_approved_mercari_rows = lambda batch_prefix: self.fail(
+            "GET must not rebuild approved CSV"
+        )
+
+        body, status = self.module.export_approved_mercari_csv(
+            FakeRequest(args={"batch_prefix": "exports/2026-07-06"}, method="GET")
+        )
+
+        self.assertEqual(status, 405)
+        self.assertIn("method not allowed", body)
 
     def test_export_approved_mercari_csv_reports_unknown_batch(self):
         self.module.export_approved_mercari_rows = lambda batch_prefix: -1

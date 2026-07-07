@@ -346,6 +346,8 @@ def request_batch_prefix(request) -> str:
 @functions_framework.http
 def export_approved_mercari_csv(request):
     """HTTP entrypoint that rebuilds Approved_Mercari_CSV for one batch."""
+    if getattr(request, "method", "").upper() != "POST":
+        return ("method not allowed\n", 405)
     batch_prefix = request_batch_prefix(request)
     if not batch_prefix:
         return ("batch_prefix is required\n", 400)

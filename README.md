@@ -160,7 +160,7 @@ gcloud functions deploy export-approved-mercari-csv `
   --set-env-vars=SPREADSHEET_ID=YOUR_SPREADSHEET_ID
 ```
 
-実行時はbatch混在を避けるため、HTTP query parameterで `batch_prefix=exports/{batch_id}` を必ず指定します。
+実行時はbatch混在を避けるため、POST requestのHTTP query parameterで `batch_prefix=exports/{batch_id}` を必ず指定します。GET requestでは再生成しません。
 
 ### Google Cloud Consoleで環境変数を設定する手順
 
@@ -342,7 +342,7 @@ M相当
 
 `Draft_Mercari_List` と `Yahoo_List` は先頭画像URLを冪等キーとして扱うため、同じ商品管理コードが別batchで再利用されても、画像URLが異なれば別商品として扱えます。`Review_List` は `batch_prefix/product_code` をキーにし、既存行がある場合は手動編集を保護するため追記しません。
 
-承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで `export_approved_mercari_csv?batch_prefix=exports/{batch_id}` を実行します。指定batchのreview行がない場合は、既存の `Approved_Mercari_CSV` を変更せずにエラー終了します。
+承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで `export_approved_mercari_csv?batch_prefix=exports/{batch_id}` へPOSTします。指定batchのreview行がない場合は、既存の `Approved_Mercari_CSV` を変更せずにエラー終了します。
 
 ## result.json
 
