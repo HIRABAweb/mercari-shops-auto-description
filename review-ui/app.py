@@ -59,11 +59,13 @@ def create_app() -> Flask:
 
     @app.get("/batches/<path:batch_id>")
     def batch_detail(batch_id: str):
+        items = list_review_items(batch_id)
         return render_template(
             "batch_detail.html",
             batch_id=batch_id,
             batch_prefix=normalize_batch_prefix(batch_id),
-            items=list_review_items(batch_id),
+            items=items,
+            approved_count=approved_item_count(items),
         )
 
     @app.get("/batches/<path:batch_id>/items/<product_code>/images/<int:image_index>")
@@ -143,6 +145,9 @@ def create_app() -> Flask:
         )
         if exported_count < 0:
             abort(404)
+        if exported_count == 0:
+            flash("No approved items. Save and approve at least one item before generating CSV.")
+            return redirect(url_for("batch_detail", batch_id=batch_id))
         object_name = upload_approved_csv(batch_id, csv_text)
         flash(f"Generated approved CSV with {exported_count} rows: {object_name}")
         return redirect(url_for("batch_detail", batch_id=batch_id))
@@ -231,6 +236,14 @@ def image_previews_from_draft_row(draft_row: dict[str, str]) -> list[dict[str, s
         if draft_row.get(header, "").strip():
             previews.append({"index": index, "header": header})
     return previews
+
+
+def approved_item_count(items) -> int:
+    return sum(
+        1
+        for item in items
+        if getattr(item, "review_status", "").strip().lower() == "approved"
+    )
 
 
 def upload_approved_csv(batch_id: str, csv_text: str) -> str:

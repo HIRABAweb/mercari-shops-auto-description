@@ -119,6 +119,25 @@ def test_batch_page_uses_batch_scoped_items(monkeypatch):
     assert b"category review" in response.data
     assert b"storage.googleapis.com" not in response.data
     assert b"/batches/2026-07-07/items/A0001/images/1" in response.data
+    assert b"disabled" in response.data
+
+
+def test_batch_page_enables_export_when_item_is_approved(monkeypatch):
+    module = load_review_ui_module()
+    item = SimpleNamespace(
+        first_image_url="",
+        title="Coach shoulder bag",
+        product_code="A0001",
+        reason="",
+        review_status="approved",
+    )
+    monkeypatch.setattr(module, "list_review_items", lambda batch_id: [item])
+
+    response = module.app.test_client().get("/batches/2026-07-07")
+
+    assert response.status_code == 200
+    assert b"Generate CSV" in response.data
+    assert b"disabled" not in response.data
 
 
 def test_storage_url_to_blob_ref_accepts_storage_googleapis_url():
@@ -250,6 +269,31 @@ def test_export_posts_generates_gcs_object_without_live_gcs(monkeypatch):
 
     assert response.status_code == 302
     assert uploaded["object"] == "exports/2026-07-07/approved/mercari_shops.csv"
+
+
+def test_export_post_does_not_upload_when_no_approved_rows(monkeypatch):
+    module = load_review_ui_module()
+    client = module.app.test_client()
+    monkeypatch.setattr(module, "list_review_items", lambda batch_id: [])
+    monkeypatch.setattr(
+        module,
+        "export_approved_mercari_rows_and_csv",
+        lambda batch_prefix: (0, "header\n"),
+    )
+    uploaded = []
+    monkeypatch.setattr(
+        module,
+        "upload_approved_csv",
+        lambda batch_id, csv_text: uploaded.append((batch_id, csv_text)),
+    )
+
+    response = client.post(
+        "/batches/2026-07-07/export",
+        data={"csrf_token": csrf_from_session(client)},
+    )
+
+    assert response.status_code == 302
+    assert uploaded == []
 
 
 def test_export_post_rejects_missing_csrf(monkeypatch):
