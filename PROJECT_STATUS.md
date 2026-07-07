@@ -1,5 +1,28 @@
 # PROJECT_STATUS.md
 
+## 2026-07-08 更新: Phase 1 本番導線をReview UIへ接続
+
+### 到達点
+- Review UIは `hirabaaiwork@gmail.com` でIAPログインできることを確認済み。
+- `image-to-description` を再デプロイし、trigger bucketを `test-review-ui` に変更済み。
+- `yahuoku-to-mercarishops` を再デプロイし、trigger bucketを `test-review-ui` に変更済み。
+- `yahuoku-to-mercarishops` に `SPREADSHEET_ID=16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc` を設定済み。
+- 既存のprompt bucket/file名、Gemini model、Secret名は維持した。
+- Runtime service account `183777458573-compute@developer.gserviceaccount.com` に `test-review-ui` の読み書き権限を付与済み。
+
+### 現在の構成
+- 外注/運用アップロード先 bucket: `test-review-ui`
+- Review UI参照Spreadsheet: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
+- 商品処理Functions runtime service account: `183777458573-compute@developer.gserviceaccount.com`
+- Review UI runtime service account: `mercari-review-ui-sa@gen-lang-client-0122735738.iam.gserviceaccount.com`
+
+### 次に確認すること
+- Spreadsheetに `183777458573-compute@developer.gserviceaccount.com` が編集者として追加されていること。
+- `test-review-ui` にテスト商品を1件アップロードすること。
+- 推奨パスは `exports/{batch_id}/{item_id}/`。
+- 商品画像と `_SUCCESS.txt` を置いた後、`_description.txt`、`mercari.csv`、`review_required/{item_id}.csv`、Sheets行が生成されること。
+- Review UIのbatch一覧に該当batchが表示されること。
+
 ## 2026-07-08 更新: Review UI デプロイとIAP OAuth確認中
 
 ### 到達点
@@ -12,7 +35,7 @@
 - Cloud Run serviceはIAP有効、許可ユーザーは `hirabaaiwork@gmail.com`。
 
 ### 現在のブロッカー
-- Review UI URLで `Empty Google Account OAuth client ID(s)/secret(s).` が出ている。
+- Review UI URLで出ていた `Empty Google Account OAuth client ID(s)/secret(s).` は、IAP OAuth auto-generate credentials 後に解消済み。
 - これはReview UIアプリ本体のエラーではなく、IAPのOAuth client ID/secretが未設定の状態。
 - 組織なしGoogle Cloud projectでは、初回のIAP OAuth設定をGoogle Cloud Consoleで行うか、手動作成したcustom OAuth clientをIAP settingsへ適用する必要がある。
 

@@ -90,6 +90,17 @@ service accountメールアドレスの形:
 mercari-review-ui-sa@gen-lang-client-0122735738.iam.gserviceaccount.com
 ```
 
+Phase 1のReview UIへ商品処理結果を流すには、既存Cloud Functions用のservice accountもSpreadsheet編集者に追加する必要があります。
+
+```text
+183777458573-compute@developer.gserviceaccount.com
+```
+
+役割の違い:
+
+- `mercari-review-ui-sa@...`: Review UIがSpreadsheetを読む/編集するため
+- `183777458573-compute@...`: 商品処理FunctionsがSpreadsheetへ下書き・レビュー行を書き込むため
+
 ### 4. 誰がReview UIに入れるか
 
 今の予定では、Review UIはIAPで守ります。
