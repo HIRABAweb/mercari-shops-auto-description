@@ -19,7 +19,13 @@ function Require-Command($Name) {
 
 function New-RandomSecret {
     $bytes = New-Object byte[] 48
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
     return [Convert]::ToBase64String($bytes)
 }
 
@@ -47,6 +53,7 @@ gcloud services enable `
     artifactregistry.googleapis.com `
     cloudbuild.googleapis.com `
     iap.googleapis.com `
+    cloudresourcemanager.googleapis.com `
     --project=$ProjectId
 
 if (-not (gcloud storage buckets describe "gs://$ProductBucketName" --project=$ProjectId 2>$null)) {
