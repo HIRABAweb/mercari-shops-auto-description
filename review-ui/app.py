@@ -66,6 +66,7 @@ def create_app() -> Flask:
             batch_prefix=normalize_batch_prefix(batch_id),
             items=items,
             approved_count=approved_item_count(items),
+            total_count=len(items),
         )
 
     @app.get("/batches/<path:batch_id>/items/<product_code>/images/<int:image_index>")

@@ -117,6 +117,7 @@ def test_batch_page_uses_batch_scoped_items(monkeypatch):
     assert response.status_code == 200
     assert b"Coach shoulder bag" in response.data
     assert b"category review" in response.data
+    assert b"0 / 1 approved" in response.data
     assert b"storage.googleapis.com" not in response.data
     assert b"/batches/2026-07-07/items/A0001/images/1" in response.data
     assert b"disabled" in response.data
@@ -137,6 +138,7 @@ def test_batch_page_enables_export_when_item_is_approved(monkeypatch):
 
     assert response.status_code == 200
     assert b"Generate CSV" in response.data
+    assert b"1 / 1 approved" in response.data
     assert b"disabled" not in response.data
 
 

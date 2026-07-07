@@ -5,6 +5,7 @@
     <div>
       <h1>{{ batch_id }}</h1>
       <p><code>{{ batch_prefix }}</code></p>
+      <p>{{ approved_count }} / {{ total_count }} approved. CSV generation includes approved items only.</p>
     </div>
     <div class="heading-actions">
       <form method="post" action="{{ url_for('export_batch', batch_id=batch_id) }}">
