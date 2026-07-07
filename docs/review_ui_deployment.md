@@ -13,6 +13,7 @@ operator, see `docs/user_action_checklist.md`.
 - Authentication: Cloud Run direct IAP
 - Allowed user: `hirabaaiwork@gmail.com`
 - Spreadsheet ID: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
+- `PRODUCT_BUCKET_NAME`: `test-review-ui`
 - Approved CSV object path: `exports/{batch_id}/approved/mercari_shops.csv`
 - `FLASK_SECRET_KEY`: required on Cloud Run
 - Cost guardrails:
@@ -25,23 +26,34 @@ operator, see `docs/user_action_checklist.md`.
 
 ## Bucket choice
 
-The preferred `PRODUCT_BUCKET_NAME` is the existing product upload bucket used by
-the two Cloud Functions. Reusing it avoids creating another storage location and
-keeps final CSVs next to the generated artifacts.
+`PRODUCT_BUCKET_NAME` is set to `test-review-ui` for this deployment plan.
+Contractors should upload product images and `_SUCCESS.txt` under this bucket if
+this Review UI deployment is used for production verification.
 
 The Review UI does not embed private GCS image URLs directly in the page. It
 serves item thumbnails through a Cloud Run image proxy and only allows objects
 from `PRODUCT_BUCKET_NAME`, so the Cloud Run service account must be able to read
 the uploaded product images in that bucket.
 
-If a separate bucket is still required, use a globally unique name such as:
+Creating or using this bucket can create storage costs, so confirm the project
+budget/alert before deployment.
+
+## Service account
+
+`hirabaaiwork@gmail.com` is the human user allowed to open the Review UI through
+IAP. It is not the runtime service account used by Cloud Run.
+
+Use a dedicated runtime service account for the service:
 
 ```text
-hiraba-mercari-review-approved-csv
+mercari-review-ui-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com
 ```
 
-Creating a new bucket can create storage costs, so this should be done only after
-confirming it is necessary.
+This runtime service account needs:
+
+- Edit access to the target Google Spreadsheet.
+- Read access to product images in `test-review-ui`.
+- Write access to approved CSV objects in `test-review-ui`.
 
 ## Build and deploy commands
 
@@ -52,11 +64,13 @@ $ProjectId = "YOUR_PROJECT_ID"
 $Region = "asia-northeast1"
 $ServiceName = "mercari-review-ui"
 $Image = "$Region-docker.pkg.dev/$ProjectId/review-ui/$ServiceName:latest"
-$ProductBucketName = "YOUR_EXISTING_PRODUCT_BUCKET"
+$ProductBucketName = "test-review-ui"
 $SpreadsheetId = "16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc"
 $AllowedUser = "hirabaaiwork@gmail.com"
 $ProjectNumber = "YOUR_PROJECT_NUMBER"
 $FlaskSecretKey = "REPLACE_WITH_RANDOM_SECRET"
+$ServiceAccountName = "mercari-review-ui-sa"
+$ServiceAccountEmail = "$ServiceAccountName@$ProjectId.iam.gserviceaccount.com"
 ```
 
 Enable required APIs only if they are not already enabled:
@@ -70,6 +84,14 @@ gcloud services enable `
   --project=$ProjectId
 ```
 
+Create the GCS bucket only if it does not already exist:
+
+```powershell
+gcloud storage buckets create "gs://$ProductBucketName" `
+  --location=$Region `
+  --project=$ProjectId
+```
+
 Create the Artifact Registry repository only if it does not already exist:
 
 ```powershell
@@ -78,6 +100,28 @@ gcloud artifacts repositories create review-ui `
   --location=$Region `
   --project=$ProjectId
 ```
+
+Create the Cloud Run runtime service account only if it does not already exist:
+
+```powershell
+gcloud iam service-accounts create $ServiceAccountName `
+  --display-name="Mercari Review UI runtime" `
+  --project=$ProjectId
+```
+
+Grant the runtime service account read/write access to the review bucket:
+
+```powershell
+gcloud storage buckets add-iam-policy-binding "gs://$ProductBucketName" `
+  --member="serviceAccount:$ServiceAccountEmail" `
+  --role="roles/storage.objectAdmin" `
+  --project=$ProjectId
+```
+
+Share the Spreadsheet with `$ServiceAccountEmail` as an editor before using the
+Review UI. Sharing it with `hirabaaiwork@gmail.com` lets the human user open the
+sheet, but the Cloud Run app itself needs the runtime service account to be an
+editor too.
 
 Build the image from the repository root. Use `cloudbuild.review-ui.yaml` so
 Cloud Build uses `review-ui/Dockerfile` explicitly:
@@ -102,6 +146,7 @@ gcloud run deploy $ServiceName `
   --cpu=1 `
   --no-allow-unauthenticated `
   --iap `
+  --service-account=$ServiceAccountEmail `
   --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,FLASK_SECRET_KEY=$FlaskSecretKey"
 ```
 
@@ -127,19 +172,15 @@ gcloud iap web add-iam-policy-binding `
   --project=$ProjectId
 ```
 
-The Cloud Run service account also needs:
-
-- Edit access to the target Google Spreadsheet.
-- Read access to product images in `$ProductBucketName`.
-- Write access to approved CSV objects in `$ProductBucketName`.
-
 ## Production checklist
 
 - Confirm billing budget/alert is configured before any deployment.
-- Confirm the existing product bucket name.
+- Confirm the `test-review-ui` bucket exists.
 - Prepare a random `FLASK_SECRET_KEY`.
 - Confirm Cloud Run IAP can be enabled in the target project.
 - Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
+- Confirm `$ServiceAccountEmail` is an editor on the Spreadsheet.
+- Confirm `$ServiceAccountEmail` has read/write access to `test-review-ui`.
 - Confirm `/healthz` returns `ok` after deployment.
 - Confirm private product thumbnails render in the Review UI.
 - Generate one approved CSV and verify it is saved to

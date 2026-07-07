@@ -27,7 +27,13 @@ Review UIは新しいCloud Runサービスとして動かします。
 
 - Cloud Runを作ってよい
 - Artifact RegistryにDocker imageを置いてよい
-- 課金アラートや予算を確認した
+- 課金アラートや予算をGoogle Cloudで設定・確認した
+
+補足:
+
+課金アラートや予算は、Google CloudのBilling画面で設定します。
+この設定はお金に関わるため、基本的にはあなたがGoogle Cloud上で確認してください。
+こちらでは手順書の整備や、設定後のデプロイ手順の準備を進めます。
 
 ### 2. 本番のbucket名
 
@@ -36,8 +42,8 @@ Review UIは、商品画像を読むためにGCS bucketへアクセスします�
 
 確認すること:
 
-- 商品画像をアップロードしている本番bucket名
-- `PRODUCT_BUCKET_NAME` にそのbucket名を設定してよいか
+- bucket名は `test-review-ui`
+- `PRODUCT_BUCKET_NAME` に `test-review-ui` を設定してよい
 
 ### 3. 権限を付けてよいか
 
@@ -49,9 +55,22 @@ Review UIのCloud Run service accountには、次の権限が必要です。
 
 確認すること:
 
-- どのservice accountに権限を付けるか
+- Cloud Run用のservice accountを作ってよい
 - Spreadsheetに編集者として追加してよいか
 - GCS bucketの読み書き権限を付けてよいか
+
+注意:
+
+`hirabaaiwork@gmail.com` は、人間がReview UIへログインするためのアカウントです。
+Cloud RunのプログラムがGoogle SheetsやGCSへアクセスするには、別のservice accountが必要です。
+
+おすすめのservice account名:
+
+```text
+mercari-review-ui-sa
+```
+
+このservice accountをSpreadsheetの編集者に追加し、`test-review-ui` bucketを読み書きできるようにします。
 
 ### 4. 誰がReview UIに入れるか
 
@@ -62,6 +81,8 @@ Review UIのCloud Run service accountには、次の権限が必要です。
 
 - `hirabaaiwork@gmail.com` でログインできる
 - それ以外の人を入れない運用でよい
+
+ここはあなたの希望どおり、`hirabaaiwork@gmail.com` だけを許可する方針です。
 
 ### 5. 実データで確認する
 
