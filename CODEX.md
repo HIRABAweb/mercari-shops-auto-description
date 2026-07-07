@@ -1,59 +1,74 @@
 # CODEX.md
 
-## あなたの役割
-
-あなたは、このリポジトリのPython / Google Cloud Run Functions開発を支援するエンジニアです。
-
-目的は、リユースアパレル商品の出品業務を自動化することです。
-
 ## プロジェクトの目的
 
-外注者が商品画像と採寸情報をアップロードしたら、メルカリShopsに一括登録できるCSVを自動生成する。
+このリポジトリは、リユースアパレル商品の出品業務を自動化するためのPython / Google Cloud Run Functions / Cloud Runプロジェクトです。
 
-## 現在の状態
+外注者は商品画像と `_SUCCESS.txt` をアップロードします。システムはYahoo向け説明文、メルカリShops用下書き、レビュー用情報、承認済みCSVを生成します。
 
-Pull Request #2「CSV出力ワークフローへ改修」まで進行しています。
+## 現在の運用目標
 
-ローカルテストでは `35 passed` を確認済みです。
+- 入力は原則「商品画像 + `_SUCCESS.txt`」です。
+- 商品情報は `_SUCCESS.txt` 本文に書きます。
+- `product_info.txt` は通常運用では使いません。
+- 商品情報不足は処理停止ではなくレビュー対象にします。
+- GCS、Gemini API、ファイル破損、CSV書き込みなどの基盤エラーは停止対象です。
+- Review UIで人間が確認・修正・承認し、承認済みCSVをメルカリShopsへアップロードします。
 
-ただし、Google Cloud / Cloud Run Functions / Google Cloud Storageトリガーでのテストはまだ未実施です。
+## エージェント運用
+
+このリポジトリでは、開発担当とレビュー担当を分けます。
+
+- `グラマー`: 実装担当
+- `ラス`: レビュー担当
+
+詳細は `.agents/README.md`、`.agents/glammer.agent.md`、`.agents/ras.agent.md` を参照してください。
+
+### グラマーを使う場面
+
+- 実装、修正、開発、テスト追加、ドキュメント更新
+- レビュー指摘の修正
+- PRへの反映、コミット、push
+
+### ラスを使う場面
+
+- コードレビュー、PRレビュー
+- mainマージ前確認
+- 本番デプロイ前確認
+- 客観的なリスク確認
+
+推奨フロー:
+
+1. グラマーが実装する。
+2. グラマーがテストを通す。
+3. ラスがPR差分をレビューする。
+4. グラマーが指摘を修正する。
+5. ユーザー承認後にmainマージまたは本番デプロイへ進む。
 
 ## 重要なルール
 
-- いきなり大きな作り替えをしない
-- 小さな修正単位で提案する
-- Google Cloudで動くことを重視する
-- Cloud Run Functionsのエントリーポイントを壊さない
-- GCSトリガーの動作を壊さない
-- APIキーや認証情報をコードに直書きしない
-- メルカリShops用CSVの列構成を勝手に変えない
-- 変更したらREADMEやPROJECT_STATUS.mdも更新する
+- いきなり大きな作り替えをしない。
+- 既存Cloud Functionsのentrypointを壊さない。
+- GCSトリガーの動作を壊さない。
+- メルカリShops用CSVの列順、列数、ヘッダーを勝手に変えない。
+- Yahoo向け出力に不要な変更を入れない。
+- APIキー、secret、認証情報をコードに直書きしない。
+- 課金が発生し得るCloud操作は事前にユーザー確認する。
+- 本番デプロイ、mainマージはユーザー承認なしに行わない。
+- 未追跡の `portfolio/` は明示指示がない限り触らない。
+- 変更したら必要に応じてREADME、PROJECT_STATUS、docsを更新する。
 
-## まずやってほしいこと
+## 標準テスト
 
-コードを変更する前に、PR #2をレビューしてください。
+可能な限り次を実行します。
 
-特に以下を確認してください。
+```powershell
+python -m pytest -p no:cacheprovider tests
+```
 
-1. Cloud Run Functionsで動くか
-2. GCSトリガーで動くか
-3. 環境変数が不足していないか
-4. 出力ファイルが正しく作られるか
-5. エラー時にCloud Loggingで原因が分かるか
-6. メルカリShopsCSVの列数や必須項目に問題がないか
+Review UIを触る場合は、Flask依存が必要です。
 
-## 最初の出力形式
-
-コードを変更せず、まず以下の形式で報告してください。
-
-# PR #2 レビュー結果
-
-## 良い点
-
-## 危ない点
-
-## Google Cloudテスト前に直すべき点
-
-## Google Cloudテスト手順
-
-## 優先順位
+```powershell
+python -m pip install -r review-ui/requirements.txt
+python -m pytest -p no:cacheprovider tests/test_review_ui.py
+```
