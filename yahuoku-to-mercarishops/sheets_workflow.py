@@ -557,6 +557,8 @@ def build_approved_mercari_sheet_rows(batch_prefix: str, spreadsheet=None) -> li
         return None
 
     approved_keys = approved_review_item_keys(review_sheet, batch_prefix)
+    if not approved_keys:
+        return []
     approved_rows = [
         row
         for row in worksheet_values(draft_sheet)
@@ -572,6 +574,8 @@ def export_approved_mercari_rows_and_csv(batch_prefix: str) -> tuple[int, str]:
     rows = build_approved_mercari_sheet_rows(batch_prefix, spreadsheet)
     if rows is None:
         return -1, ""
+    if not rows:
+        return 0, ""
 
     replace_sheet_rows(approved_sheet, rows, len(MERCARI_HEADERS))
     return len(rows) - 1, list_rows_to_csv_text(rows)

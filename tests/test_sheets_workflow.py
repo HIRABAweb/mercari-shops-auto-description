@@ -314,7 +314,7 @@ def test_export_approved_mercari_rows_and_csv_returns_csv_text(monkeypatch):
     )
     spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI] = FakeWorksheet(
         sheets_workflow.SHEET_NAME_APPROVED_MERCARI,
-        [],
+        [["existing approved csv row"]],
     )
 
     exported_count, csv_text = sheets_workflow.export_approved_mercari_rows_and_csv(
@@ -350,7 +350,7 @@ def test_export_approved_mercari_rows_excludes_needs_review_rows(monkeypatch):
     )
     spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI] = FakeWorksheet(
         sheets_workflow.SHEET_NAME_APPROVED_MERCARI,
-        [],
+        [["existing approved csv row"]],
     )
 
     exported_count, csv_text = sheets_workflow.export_approved_mercari_rows_and_csv(
@@ -358,4 +358,8 @@ def test_export_approved_mercari_rows_excludes_needs_review_rows(monkeypatch):
     )
 
     assert exported_count == 0
+    assert csv_text == ""
     assert "needs review title" not in csv_text
+    assert spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI].values == [
+        ["existing approved csv row"]
+    ]
