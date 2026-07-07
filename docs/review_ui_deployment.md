@@ -26,6 +26,11 @@ The preferred `PRODUCT_BUCKET_NAME` is the existing product upload bucket used b
 the two Cloud Functions. Reusing it avoids creating another storage location and
 keeps final CSVs next to the generated artifacts.
 
+The Review UI does not embed private GCS image URLs directly in the page. It
+serves item thumbnails through a Cloud Run image proxy and only allows objects
+from `PRODUCT_BUCKET_NAME`, so the Cloud Run service account must be able to read
+the uploaded product images in that bucket.
+
 If a separate bucket is still required, use a globally unique name such as:
 
 ```text
@@ -122,7 +127,8 @@ gcloud iap web add-iam-policy-binding `
 The Cloud Run service account also needs:
 
 - Edit access to the target Google Spreadsheet.
-- Read/write access to `$ProductBucketName`.
+- Read access to product images in `$ProductBucketName`.
+- Write access to approved CSV objects in `$ProductBucketName`.
 
 ## Production checklist
 
@@ -131,6 +137,7 @@ The Cloud Run service account also needs:
 - Prepare a random `FLASK_SECRET_KEY`.
 - Confirm Cloud Run IAP can be enabled in the target project.
 - Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
+- Confirm private product thumbnails render in the Review UI.
 - Generate one approved CSV and verify it is saved to
   `exports/{batch_id}/approved/mercari_shops.csv`.
 - Download the CSV from the UI and test upload to Mercari Shops.

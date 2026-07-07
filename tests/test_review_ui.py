@@ -74,7 +74,7 @@ def test_item_page_renders_main_fields(monkeypatch):
 def test_batch_page_uses_batch_scoped_items(monkeypatch):
     module = load_review_ui_module()
     item = SimpleNamespace(
-        first_image_url="https://storage.googleapis.com/bucket/exports/2026-07-07/A0001/001.jpg",
+        first_image_url="https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg",
         title="Coach shoulder bag",
         product_code="A0001",
         reason="category review",
@@ -87,6 +87,114 @@ def test_batch_page_uses_batch_scoped_items(monkeypatch):
     assert response.status_code == 200
     assert b"Coach shoulder bag" in response.data
     assert b"category review" in response.data
+    assert b"storage.googleapis.com" not in response.data
+    assert b"/batches/2026-07-07/items/A0001/images/1" in response.data
+
+
+def test_storage_url_to_blob_ref_accepts_storage_googleapis_url():
+    module = load_review_ui_module()
+
+    blob_ref = module.storage_url_to_blob_ref(
+        "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001%20main.jpg"
+    )
+
+    assert blob_ref == ("product-images", "exports/2026-07-07/A0001/001 main.jpg")
+
+
+def test_storage_url_to_blob_ref_rejects_non_gcs_url():
+    module = load_review_ui_module()
+
+    assert module.storage_url_to_blob_ref("https://example.com/image.jpg") is None
+    assert module.storage_url_to_blob_ref("gs://product-images/path/image.jpg") is None
+    assert module.storage_url_to_blob_ref("https://storage.googleapis.com/product-images") is None
+
+
+def test_item_image_proxies_private_gcs_image(monkeypatch):
+    module = load_review_ui_module()
+    image_url = "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg"
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setattr(
+        module,
+        "get_review_item",
+        lambda batch_id, product_code: (
+            {"review_status": "needs_review"},
+            {module.IMAGE_FIELDS[0]: image_url},
+        ),
+    )
+
+    class FakeBlob:
+        content_type = "image/jpeg"
+
+        def exists(self):
+            return True
+
+        def download_as_bytes(self):
+            return b"fake-jpeg-bytes"
+
+    class FakeBucket:
+        def __init__(self):
+            self.requested_object_name = None
+
+        def blob(self, object_name):
+            self.requested_object_name = object_name
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def __init__(self):
+            self.bucket_obj = FakeBucket()
+
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return self.bucket_obj
+
+    fake_client = FakeStorageClient()
+    monkeypatch.setattr(module, "storage_client", lambda: fake_client)
+
+    response = module.app.test_client().get("/batches/2026-07-07/items/A0001/images/1")
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/jpeg"
+    assert response.data == b"fake-jpeg-bytes"
+    assert fake_client.bucket_obj.requested_object_name == "exports/2026-07-07/A0001/001.jpg"
+
+
+def test_item_image_rejects_other_bucket(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setattr(
+        module,
+        "get_review_item",
+        lambda batch_id, product_code: (
+            {"review_status": "needs_review"},
+            {module.IMAGE_FIELDS[0]: "https://storage.googleapis.com/other-bucket/image.jpg"},
+        ),
+    )
+
+    response = module.app.test_client().get("/batches/2026-07-07/items/A0001/images/1")
+
+    assert response.status_code == 403
+
+
+def test_item_image_rejects_other_object_in_same_bucket(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setattr(
+        module,
+        "get_review_item",
+        lambda batch_id, product_code: (
+            {"review_status": "needs_review"},
+            {
+                module.IMAGE_FIELDS[0]: (
+                    "https://storage.googleapis.com/product-images/"
+                    "exports/2026-07-07/OTHER/001.jpg"
+                )
+            },
+        ),
+    )
+
+    response = module.app.test_client().get("/batches/2026-07-07/items/A0001/images/1")
+
+    assert response.status_code == 403
 
 
 def test_export_posts_generates_gcs_object_without_live_gcs(monkeypatch):

@@ -6,7 +6,9 @@ import os
 import secrets
 import sys
 from datetime import datetime, timezone
+from mimetypes import guess_type
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from flask import Flask, Response, abort, flash, redirect, render_template, request, session, url_for
 from google.cloud import storage
@@ -63,6 +65,31 @@ def create_app() -> Flask:
             batch_prefix=normalize_batch_prefix(batch_id),
             items=list_review_items(batch_id),
         )
+
+    @app.get("/batches/<path:batch_id>/items/<product_code>/images/<int:image_index>")
+    def item_image(batch_id: str, product_code: str, image_index: int):
+        if image_index < 1 or image_index > len(IMAGE_FIELDS):
+            abort(404)
+        try:
+            _, draft_row = get_review_item(batch_id, product_code)
+        except KeyError:
+            abort(404)
+
+        image_url = draft_row.get(IMAGE_FIELDS[image_index - 1], "")
+        blob_ref = storage_url_to_blob_ref(image_url)
+        if not blob_ref:
+            abort(404)
+        bucket_name, object_name = blob_ref
+        if bucket_name != required_env("PRODUCT_BUCKET_NAME"):
+            abort(403)
+        if not object_name_matches_item(batch_id, product_code, object_name):
+            abort(403)
+
+        blob = storage_client().bucket(bucket_name).blob(object_name)
+        if not blob.exists():
+            abort(404)
+        content_type = blob.content_type or guess_type(object_name)[0] or "application/octet-stream"
+        return Response(blob.download_as_bytes(), mimetype=content_type)
 
     @app.get("/batches/<path:batch_id>/items/<product_code>")
     def item_detail(batch_id: str, product_code: str):
@@ -178,6 +205,23 @@ def current_utc_timestamp() -> str:
 def approved_csv_object_name(batch_id: str) -> str:
     normalized_batch_id = batch_id_from_prefix(normalize_batch_prefix(batch_id))
     return APPROVED_CSV_OBJECT_TEMPLATE.format(batch_id=normalized_batch_id)
+
+
+def storage_url_to_blob_ref(image_url: str) -> tuple[str, str] | None:
+    parsed = urlparse((image_url or "").strip())
+    if parsed.scheme != "https" or parsed.netloc != "storage.googleapis.com":
+        return None
+    parts = parsed.path.lstrip("/").split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[0], unquote(parts[1])
+
+
+def object_name_matches_item(batch_id: str, product_code: str, object_name: str) -> bool:
+    batch_prefix = normalize_batch_prefix(batch_id).strip("/")
+    if not batch_prefix or not product_code:
+        return False
+    return object_name.startswith(f"{batch_prefix}/{product_code}/")
 
 
 def upload_approved_csv(batch_id: str, csv_text: str) -> str:
