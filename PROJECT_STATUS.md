@@ -23,6 +23,7 @@
 - `PRODUCT_BUCKET_NAME` は新規bucketを作るより、既存の商品アップロードbucketを優先して使う。
 - `FLASK_SECRET_KEY` の本番値。
 - `review-ui/Dockerfile` を使う場合、ビルドコンテキストをリポジトリルートにすること。
+- Cloud Buildでは `cloudbuild.review-ui.yaml` を使い、`review-ui/Dockerfile` を明示すること。
 - 実データでMercari Shops CSVのダウンロード、アップロード、最終確認までの通し検証。
 - 課金回避のため、実デプロイ前にbudget/alert、Cloud Run `min-instances=0`、`max-instances=1`、Artifact Registry画像削除運用を確認する。
 

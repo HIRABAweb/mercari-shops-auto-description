@@ -71,11 +71,13 @@ gcloud artifacts repositories create review-ui `
   --project=$ProjectId
 ```
 
-Build the image from the repository root:
+Build the image from the repository root. Use `cloudbuild.review-ui.yaml` so
+Cloud Build uses `review-ui/Dockerfile` explicitly:
 
 ```powershell
 gcloud builds submit . `
-  --tag=$Image `
+  --config=cloudbuild.review-ui.yaml `
+  --substitutions="_IMAGE=$Image" `
   --project=$ProjectId
 ```
 

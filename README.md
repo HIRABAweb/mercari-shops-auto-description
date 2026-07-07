@@ -480,6 +480,8 @@ Google Sheetsを直接編集する代わりに、`review-ui` をCloud Runへデ�
 
 Dockerfileは `review-ui/Dockerfile` を使います。Cloud BuildやCloud Runでビルドする場合は、リポジトリルートをビルドコンテキストにしてください。`review-ui` 単体をコンテキストにすると、既存の `yahuoku-to-mercarishops` 側のCSVヘッダーやSheets共通ロジックを参照できません。
 
+Cloud Buildでは `cloudbuild.review-ui.yaml` を使い、`review-ui/Dockerfile` を明示します。
+
 本番ではCloud Runの認証を必須にし、Google認証/IAPでアクセスできるユーザーを制限してください。未認証公開は想定していません。
 
 具体的な本番デプロイ案は `docs/review_ui_deployment.md` に記録しています。初期設定ではCloud Run direct IAPを使い、許可ユーザーを `hirabaaiwork@gmail.com` に限定します。課金回避のため、実デプロイ前にbudget/alert、Cloud Runの `min-instances=0`、`max-instances=1`、Artifact Registry画像の削除運用を確認してください。
