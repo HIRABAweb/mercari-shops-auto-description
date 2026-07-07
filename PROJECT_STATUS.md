@@ -1,5 +1,33 @@
 # PROJECT_STATUS.md
 
+## 2026-07-08 更新: Review UI デプロイとIAP OAuth確認中
+
+### 到達点
+- Google Cloud project `gen-lang-client-0122735738` にReview UI用Cloud Runサービス `mercari-review-ui` をデプロイ済み。
+- Artifact Registry repository `review-ui` とDocker imageを作成済み。
+- Product bucketは `test-review-ui` を使用。
+- Cloud Run runtime service accountは `mercari-review-ui-sa@gen-lang-client-0122735738.iam.gserviceaccount.com`。
+- Runtime service accountには `test-review-ui` の読み書き権限を付与済み。
+- Runtime service accountはSpreadsheet編集者として追加済み。
+- Cloud Run serviceはIAP有効、許可ユーザーは `hirabaaiwork@gmail.com`。
+
+### 現在のブロッカー
+- Review UI URLで `Empty Google Account OAuth client ID(s)/secret(s).` が出ている。
+- これはReview UIアプリ本体のエラーではなく、IAPのOAuth client ID/secretが未設定の状態。
+- 組織なしGoogle Cloud projectでは、初回のIAP OAuth設定をGoogle Cloud Consoleで行うか、手動作成したcustom OAuth clientをIAP settingsへ適用する必要がある。
+
+### 対応済み
+- `docs/review_ui_deployment.md` にIAP OAuth setup手順とトラブルシュートを追記。
+- `docs/user_action_checklist.md` に、ユーザーがConsoleで確認するOAuth設定を追記。
+- `scripts/apply_iap_oauth_settings.ps1` を追加し、手動作成したOAuth client ID/secretを安全にIAP project settingsへ適用できるようにした。
+
+### 次に確認すること
+- Google Cloud Consoleで `mercari-review-ui` のIAP OAuth/Google Auth Platform設定を完了する。
+- Audienceは `External` とし、`hirabaaiwork@gmail.com` でログインできることを確認する。
+- Consoleでauto-generated credentialsを使える場合は、それを優先する。
+- 手動OAuth clientを作る場合、client secretはチャットに貼らず、Consoleまたはローカル補助スクリプトで設定する。
+- OAuth設定後、Review UI URLがログイン画面またはアプリ画面へ進むことを確認する。
+
 ## 2026-07-07 更新: Phase 1 Review UI 初期実装
 
 ### 方針

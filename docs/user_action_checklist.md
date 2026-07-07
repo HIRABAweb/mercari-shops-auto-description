@@ -102,6 +102,15 @@ mercari-review-ui-sa@gen-lang-client-0122735738.iam.gserviceaccount.com
 
 ここはあなたの希望どおり、`hirabaaiwork@gmail.com` だけを許可する方針です。
 
+現在の追加確認:
+
+- Review UI URLで `Empty Google Account OAuth client ID(s)/secret(s).` が出る場合、アプリではなくIAPのOAuth設定が未完了です。
+- Project `gen-lang-client-0122735738` は組織なしプロジェクトのため、初回のIAP OAuth設定はGoogle Cloud Consoleで行う必要があります。
+- Cloud Runの `mercari-review-ui` でIAP OAuth/Google Auth Platformを設定してください。
+- Audienceは `External` を選び、`hirabaaiwork@gmail.com` でログインできるようにしてください。
+- Consoleに「auto-generate credentials」の選択肢があれば、それを使うのが一番簡単です。
+- 手動でOAuth client ID/secretを作る場合、secretはチャットに貼らず、Console上で設定するか `scripts/apply_iap_oauth_settings.ps1` を手元で実行してください。
+
 ### 5. 実データで確認する
 
 デプロイ後、実際の商品で動作確認が必要です。

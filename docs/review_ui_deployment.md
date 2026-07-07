@@ -186,12 +186,61 @@ gcloud iap web add-iam-policy-binding `
   --project=$ProjectId
 ```
 
+## IAP OAuth setup
+
+If the Review UI URL returns the following response, Cloud Run is deployed but
+IAP does not yet have OAuth credentials configured:
+
+```text
+Empty Google Account OAuth client ID(s)/secret(s).
+```
+
+This is common when direct IAP is enabled from `gcloud` in a project that is not
+under a Google Cloud Organization. Google Cloud can grant the IAP access role
+from the CLI, but the first OAuth client setup must be completed in the Google
+Cloud console or by applying a custom OAuth client.
+
+Recommended manual path:
+
+1. Open Google Cloud Console.
+2. Select project `gen-lang-client-0122735738`.
+3. Open Cloud Run, then service `mercari-review-ui`.
+4. Open the Security or IAP settings.
+5. Configure IAP OAuth/Google Auth Platform.
+6. Use an External audience so `hirabaaiwork@gmail.com` can sign in.
+7. Use auto-generated credentials if the console offers that option.
+8. Confirm `hirabaaiwork@gmail.com` remains the only IAP user with
+   `roles/iap.httpsResourceAccessor`.
+9. Open the Review UI URL again.
+
+If you manually create a custom OAuth client instead, create a Web application
+OAuth client and add this redirect URI:
+
+```text
+https://iap.googleapis.com/v1/oauth/clientIds/CLIENT_ID:handleRedirect
+```
+
+Replace `CLIENT_ID` with the OAuth client ID you just created.
+
+After creating the custom OAuth client, either apply it in the Google Cloud
+Console or run the helper below. Do not paste the OAuth client secret into chat
+or commit it to the repository.
+
+```powershell
+.\scripts\apply_iap_oauth_settings.ps1
+```
+
+The helper prompts for the OAuth client ID and secret, writes a temporary local
+settings file, runs `gcloud iap settings set`, and deletes the temporary file.
+
 ## Production checklist
 
 - Confirm billing budget/alert is configured before any deployment.
 - Confirm the `test-review-ui` bucket exists.
 - Prepare a random `FLASK_SECRET_KEY`.
 - Confirm Cloud Run IAP can be enabled in the target project.
+- Confirm IAP OAuth is configured; the Review UI must not show
+  `Empty Google Account OAuth client ID(s)/secret(s).`
 - Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
 - Confirm `$ServiceAccountEmail` is an editor on the Spreadsheet.
 - Confirm `$ServiceAccountEmail` has read/write access to `test-review-ui`.
