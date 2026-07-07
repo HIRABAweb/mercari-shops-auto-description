@@ -57,10 +57,24 @@ This runtime service account needs:
 
 ## Build and deploy commands
 
-Set these values first:
+The repository now includes a PowerShell deployment helper:
 
 ```powershell
-$ProjectId = "YOUR_PROJECT_ID"
+.\scripts\deploy_review_ui.ps1
+```
+
+The helper uses these approved defaults:
+
+- `ProjectId`: `gen-lang-client-0122735738`
+- `ProductBucketName`: `test-review-ui`
+- `SpreadsheetId`: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
+- `AllowedUser`: `hirabaaiwork@gmail.com`
+- `ServiceAccountName`: `mercari-review-ui-sa`
+
+Set these values manually only if you are not using the helper script:
+
+```powershell
+$ProjectId = "gen-lang-client-0122735738"
 $Region = "asia-northeast1"
 $ServiceName = "mercari-review-ui"
 $Image = "$Region-docker.pkg.dev/$ProjectId/review-ui/$ServiceName:latest"

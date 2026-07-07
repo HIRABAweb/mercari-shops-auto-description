@@ -35,6 +35,13 @@ Review UIは新しいCloud Runサービスとして動かします。
 この設定はお金に関わるため、基本的にはあなたがGoogle Cloud上で確認してください。
 こちらでは手順書の整備や、設定後のデプロイ手順の準備を進めます。
 
+現在の状態:
+
+- 課金アラート/予算は設定済み
+- Project IDは `gen-lang-client-0122735738`
+- Google Cloud CLIはこのPCにインストール済み
+- ただし、Googleログインはまだ必要
+
 ### 2. 本番のbucket名
 
 Review UIは、商品画像を読むためにGCS bucketへアクセスします。
@@ -71,6 +78,17 @@ mercari-review-ui-sa
 ```
 
 このservice accountをSpreadsheetの編集者に追加し、`test-review-ui` bucketを読み書きできるようにします。
+
+あなたが手動でやること:
+
+1. Google Cloud CLIで `hirabaaiwork@gmail.com` にログインする
+2. デプロイ後に表示されるservice accountメールアドレスをSpreadsheetの編集者に追加する
+
+service accountメールアドレスの形:
+
+```text
+mercari-review-ui-sa@gen-lang-client-0122735738.iam.gserviceaccount.com
+```
 
 ### 4. 誰がReview UIに入れるか
 
