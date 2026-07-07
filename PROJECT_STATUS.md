@@ -18,6 +18,7 @@
 - 商品一覧と編集画面の画像表示はCloud Run経由のGCS画像プロキシを使い、private bucketでも表示できるようにした。
 - 商品編集画面で画像プレビューを見ながら下書きCSV項目を修正できるようにした。
 - batch詳細画面に承認済み件数を表示し、承認済み商品が0件の場合はアップロード用CSVを生成しないようにした。
+- 承認済み商品が0件の場合は、既存の `Approved_Mercari_CSV` も変更しないようにした。
 - 承認済み商品を `Save` のみで編集した場合は `needs_review` に戻し、再承認なしに最終CSVへ入らないようにした。
 - Review UIにSheets/GCSへ触らない `/healthz` を追加した。
 - `export_approved_mercari_csv` HTTP entrypointはPOSTのみ再生成を許可するようにした。
