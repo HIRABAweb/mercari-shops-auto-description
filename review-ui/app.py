@@ -107,17 +107,6 @@ def create_app() -> Flask:
         flash("Draft saved.")
         return redirect(url_for("item_detail", batch_id=batch_id, product_code=product_code))
 
-    @app.post("/batches/<path:batch_id>/items/<product_code>/approve")
-    def approve_item(batch_id: str, product_code: str):
-        validate_csrf_token()
-        approved_at = current_utc_timestamp()
-        try:
-            approve_review_item(batch_id, product_code, approved_at)
-        except KeyError:
-            abort(404)
-        flash("Item approved.")
-        return redirect(url_for("batch_detail", batch_id=batch_id))
-
     @app.post("/batches/<path:batch_id>/export")
     def export_batch(batch_id: str):
         validate_csrf_token()

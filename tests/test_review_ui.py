@@ -144,6 +144,14 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
     assert calls[0][1][2][module.TITLE_FIELD] == "Updated title"
 
 
+def test_standalone_approve_route_is_not_available():
+    module = load_review_ui_module()
+
+    response = module.app.test_client().post("/batches/2026-07-07/items/A0001/approve")
+
+    assert response.status_code == 405
+
+
 def test_cloud_run_requires_flask_secret_key(monkeypatch):
     module = load_review_ui_module()
     monkeypatch.setenv("K_SERVICE", "mercari-review-ui")
