@@ -324,3 +324,38 @@ def test_export_approved_mercari_rows_and_csv_returns_csv_text(monkeypatch):
     assert exported_count == 1
     assert "approved title" in csv_text
     assert csv_text.splitlines()[0].split(",")[0] == "商品画像名_1"
+
+
+def test_export_approved_mercari_rows_excludes_needs_review_rows(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    row_a = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001.jpg",
+            "A0001",
+        )
+        | {"商品名": "needs review title"},
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS, row_a],
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [
+            sheets_workflow.REVIEW_SHEET_HEADERS,
+            ["exports/2026-07-06/A0001", "exports/2026-07-06", "A0001", "needs_review"],
+        ],
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_APPROVED_MERCARI,
+        [],
+    )
+
+    exported_count, csv_text = sheets_workflow.export_approved_mercari_rows_and_csv(
+        "exports/2026-07-06"
+    )
+
+    assert exported_count == 0
+    assert "needs review title" not in csv_text
