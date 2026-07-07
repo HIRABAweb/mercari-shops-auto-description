@@ -3,6 +3,9 @@
 This document records the intended production deployment shape for the Phase 1
 Review UI. Do not run these commands until deployment is explicitly approved.
 
+For a plain-language checklist of decisions and manual checks required from the
+operator, see `docs/user_action_checklist.md`.
+
 ## Decisions
 
 - Service name: `mercari-review-ui`

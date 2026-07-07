@@ -486,6 +486,8 @@ Cloud Buildでは `cloudbuild.review-ui.yaml` を使い、`review-ui/Dockerfile`
 
 具体的な本番デプロイ案は `docs/review_ui_deployment.md` に記録しています。初期設定ではCloud Run direct IAPを使い、許可ユーザーを `hirabaaiwork@gmail.com` に限定します。課金回避のため、実デプロイ前にbudget/alert、Cloud Runの `min-instances=0`、`max-instances=1`、Artifact Registry画像の削除運用を確認してください。
 
+本番前に運用者が確認することは `docs/user_action_checklist.md` にまとめています。
+
 Review UIのPOST操作にはCSRF tokenを付けます。Cloud Run上では `FLASK_SECRET_KEY` が未設定の場合、起動に失敗します。
 
 ### 運用手順
