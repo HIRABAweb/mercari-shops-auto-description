@@ -262,6 +262,28 @@ def test_item_image_rejects_other_object_in_same_bucket(monkeypatch):
     assert response.status_code == 403
 
 
+def test_item_image_rejects_non_image_extension(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setattr(
+        module,
+        "get_review_item",
+        lambda batch_id, product_code: (
+            {"review_status": "needs_review"},
+            {
+                module.IMAGE_FIELDS[0]: (
+                    "https://storage.googleapis.com/product-images/"
+                    "exports/2026-07-07/A0001/_SUCCESS.txt"
+                )
+            },
+        ),
+    )
+
+    response = module.app.test_client().get("/batches/2026-07-07/items/A0001/images/1")
+
+    assert response.status_code == 404
+
+
 def test_export_posts_generates_gcs_object_without_live_gcs(monkeypatch):
     module = load_review_ui_module()
     client = module.app.test_client()

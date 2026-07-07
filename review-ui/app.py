@@ -20,6 +20,7 @@ if str(YAHUOKU_DIR) not in sys.path:
     sys.path.insert(0, str(YAHUOKU_DIR))
 
 from csv_export import MERCARI_HEADERS  # noqa: E402
+from listing_data import IMAGE_EXTENSIONS  # noqa: E402
 from sheets_workflow import (  # noqa: E402
     approve_review_item,
     batch_id_from_prefix,
@@ -91,6 +92,8 @@ def create_app() -> Flask:
             abort(403)
         if not object_name_matches_item(batch_id, product_code, object_name):
             abort(403)
+        if not object_name.lower().endswith(IMAGE_EXTENSIONS):
+            abort(404)
 
         blob = storage_client().bucket(bucket_name).blob(object_name)
         if not blob.exists():
