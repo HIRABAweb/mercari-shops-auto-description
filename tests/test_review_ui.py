@@ -44,6 +44,20 @@ def test_batches_page_renders_without_live_sheets(monkeypatch):
     assert b"No batches found." in response.data
 
 
+def test_healthz_does_not_touch_live_sheets(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setattr(
+        module,
+        "list_batch_summaries",
+        lambda: pytest.fail("healthz should not read Google Sheets"),
+    )
+
+    response = module.app.test_client().get("/healthz")
+
+    assert response.status_code == 200
+    assert response.text == "ok\n"
+
+
 def test_item_page_renders_main_fields(monkeypatch):
     module = load_review_ui_module()
     monkeypatch.setattr(

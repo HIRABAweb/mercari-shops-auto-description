@@ -57,6 +57,10 @@ def create_app() -> Flask:
     def batches():
         return render_template("batches.html", batches=list_batch_summaries())
 
+    @app.get("/healthz")
+    def healthz():
+        return ("ok\n", 200, {"Content-Type": "text/plain; charset=utf-8"})
+
     @app.get("/batches/<path:batch_id>")
     def batch_detail(batch_id: str):
         items = list_review_items(batch_id)

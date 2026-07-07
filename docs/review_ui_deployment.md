@@ -137,6 +137,7 @@ The Cloud Run service account also needs:
 - Prepare a random `FLASK_SECRET_KEY`.
 - Confirm Cloud Run IAP can be enabled in the target project.
 - Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
+- Confirm `/healthz` returns `ok` after deployment.
 - Confirm private product thumbnails render in the Review UI.
 - Generate one approved CSV and verify it is saved to
   `exports/{batch_id}/approved/mercari_shops.csv`.
