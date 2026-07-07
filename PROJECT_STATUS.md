@@ -15,6 +15,11 @@
 - 編集画面は `Save & Approve` で下書き保存後に承認する方式にし、保存前の内容を誤って承認しないようにした。
 - Review UIのPOST操作にCSRF tokenを追加した。
 - Cloud Run上では `FLASK_SECRET_KEY` を必須にした。
+- 商品一覧と編集画面の画像表示はCloud Run経由のGCS画像プロキシを使い、private bucketでも表示できるようにした。
+- 商品編集画面で画像プレビューを見ながら下書きCSV項目を修正できるようにした。
+- batch詳細画面に承認済み件数を表示し、承認済み商品が0件の場合はアップロード用CSVを生成しないようにした。
+- Review UIにSheets/GCSへ触らない `/healthz` を追加した。
+- `export_approved_mercari_csv` HTTP entrypointはPOSTのみ再生成を許可するようにした。
 
 ### 本番前に確認すること
 - Cloud Run `review-ui` のIAPまたはGoogle認証設定。
@@ -24,6 +29,9 @@
 - `FLASK_SECRET_KEY` の本番値。
 - `review-ui/Dockerfile` を使う場合、ビルドコンテキストをリポジトリルートにすること。
 - Cloud Buildでは `cloudbuild.review-ui.yaml` を使い、`review-ui/Dockerfile` を明示すること。
+- Cloud Run service accountに、Spreadsheet編集権限、商品画像のGCS read権限、承認済みCSVのGCS write権限を付与すること。
+- `/healthz` が `ok` を返すこと。
+- private bucketの商品画像サムネイルがReview UIで表示できること。
 - 実データでMercari Shops CSVのダウンロード、アップロード、最終確認までの通し検証。
 - 課金回避のため、実デプロイ前にbudget/alert、Cloud Run `min-instances=0`、`max-instances=1`、Artifact Registry画像削除運用を確認する。
 
