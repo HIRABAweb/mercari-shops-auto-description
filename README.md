@@ -470,7 +470,7 @@ Google Sheetsを直接編集する代わりに、`review-ui` をCloud Runへデ�
 | 環境変数 | 用途 | 例 |
 | --- | --- | --- |
 | `SPREADSHEET_ID` | Phase 1 workflowのSpreadsheet ID | `your-google-spreadsheet-id` |
-| `PRODUCT_BUCKET_NAME` | 承認済みCSVを保存するGCS bucket | `your-product-bucket` |
+| `PRODUCT_BUCKET_NAME` | 商品画像を読み取り、承認済みCSVを保存するGCS bucket | `your-product-bucket` |
 | `APPROVED_CSV_OBJECT_TEMPLATE` | 承認済みCSVの保存先テンプレート | `exports/{batch_id}/approved/mercari_shops.csv` |
 | `FLASK_SECRET_KEY` | 画面メッセージ用のFlask secret | ランダムな文字列 |
 
