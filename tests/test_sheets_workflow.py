@@ -263,6 +263,33 @@ def test_approve_review_item_marks_status_and_timestamp(monkeypatch):
     assert review.values[1][7] == "2026-07-06T12:00:00+00:00"
 
 
+def test_mark_review_item_needs_review_clears_approval(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [
+            sheets_workflow.REVIEW_SHEET_HEADERS,
+            [
+                "exports/2026-07-06/A0001",
+                "exports/2026-07-06",
+                "A0001",
+                "approved",
+                "",
+                "brand review",
+                "",
+                "2026-07-06T12:00:00+00:00",
+            ],
+        ],
+    )
+
+    sheets_workflow.mark_review_item_needs_review("2026-07-06", "A0001")
+
+    review = spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW]
+    assert review.values[1][3] == "needs_review"
+    assert review.values[1][7] == ""
+
+
 def test_export_approved_mercari_rows_and_csv_returns_csv_text(monkeypatch):
     spreadsheet = FakeSpreadsheet()
     monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)

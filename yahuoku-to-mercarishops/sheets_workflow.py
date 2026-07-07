@@ -405,6 +405,23 @@ def approve_review_item(batch_id_or_prefix: str, product_code: str, approved_at:
     update_worksheet_row(review_sheet, row_number, updated_row, len(REVIEW_SHEET_HEADERS))
 
 
+def mark_review_item_needs_review(batch_id_or_prefix: str, product_code: str) -> None:
+    spreadsheet = get_spreadsheet()
+    review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
+    ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    key = review_item_key(batch_prefix, product_code)
+    match = find_review_row_number(review_sheet, key)
+    if match is None:
+        raise KeyError(key)
+    row_number, row = match
+    updated_row = [row[index] if index < len(row) else "" for index in range(len(REVIEW_SHEET_HEADERS))]
+    updated_row[REVIEW_SHEET_HEADERS.index("review_status")] = REVIEW_STATUS_NEEDS_REVIEW
+    updated_row[REVIEW_SHEET_HEADERS.index("approved_at")] = ""
+    update_worksheet_row(review_sheet, row_number, updated_row, len(REVIEW_SHEET_HEADERS))
+
+
 def build_review_sheet_row(
     *,
     batch_prefix: str,

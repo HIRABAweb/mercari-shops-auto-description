@@ -28,6 +28,7 @@ from sheets_workflow import (  # noqa: E402
     get_review_item,
     list_batch_summaries,
     list_review_items,
+    mark_review_item_needs_review,
     normalize_batch_prefix,
     update_draft_item,
 )
@@ -146,6 +147,7 @@ def create_app() -> Flask:
             approve_review_item(batch_id, product_code, current_utc_timestamp())
             flash("Draft saved and item approved.")
             return redirect(url_for("batch_detail", batch_id=batch_id))
+        mark_review_item_needs_review(batch_id, product_code)
         flash("Draft saved.")
         return redirect(url_for("item_detail", batch_id=batch_id, product_code=product_code))
 

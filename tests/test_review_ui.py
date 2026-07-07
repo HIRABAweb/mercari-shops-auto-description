@@ -365,6 +365,31 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
     assert calls[0][1][2][module.TITLE_FIELD] == "Updated title"
 
 
+def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
+    module = load_review_ui_module()
+    client = module.app.test_client()
+    calls = []
+    monkeypatch.setattr(module, "update_draft_item", lambda *args: calls.append(("update", args)))
+    monkeypatch.setattr(
+        module,
+        "mark_review_item_needs_review",
+        lambda *args: calls.append(("needs_review", args)),
+    )
+
+    response = client.post(
+        "/batches/2026-07-07/items/A0001",
+        data={
+            "csrf_token": csrf_from_session(client),
+            "action": "save",
+            module.TITLE_FIELD: "Edited title",
+        },
+    )
+
+    assert response.status_code == 302
+    assert [call[0] for call in calls] == ["update", "needs_review"]
+    assert calls[1][1] == ("2026-07-07", "A0001")
+
+
 def test_standalone_approve_route_is_not_available():
     module = load_review_ui_module()
 
