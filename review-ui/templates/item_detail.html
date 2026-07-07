@@ -21,6 +21,20 @@
     </dl>
   </section>
 
+  {% if image_previews %}
+    <section class="form-section">
+      <h2>Images</h2>
+      <div class="image-grid">
+        {% for image in image_previews %}
+          <figure class="image-preview">
+            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=image.index) }}" alt="">
+            <figcaption>{{ image.header }}</figcaption>
+          </figure>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
   <form class="edit-form" method="post" action="{{ url_for('update_item', batch_id=batch_id, product_code=product_code) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <section class="form-section">

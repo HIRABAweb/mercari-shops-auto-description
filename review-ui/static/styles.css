@@ -226,6 +226,33 @@ th {
   padding: 18px;
 }
 
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 12px;
+}
+
+.image-preview {
+  margin: 0;
+}
+
+.image-preview img {
+  width: 100%;
+  aspect-ratio: 1;
+  display: block;
+  object-fit: cover;
+  background: #eef1f5;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.image-preview figcaption {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 dl {
   display: grid;
   grid-template-columns: 96px 1fr;

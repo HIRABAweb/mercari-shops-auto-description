@@ -110,6 +110,7 @@ def create_app() -> Flask:
             draft_row=draft_row,
             primary_fields=PRIMARY_FIELDS,
             image_fields=IMAGE_FIELDS,
+            image_previews=image_previews_from_draft_row(draft_row),
             extra_fields=extra_fields,
             title_field=TITLE_FIELD,
             description_field=DESCRIPTION_FIELD,
@@ -222,6 +223,14 @@ def object_name_matches_item(batch_id: str, product_code: str, object_name: str)
     if not batch_prefix or not product_code:
         return False
     return object_name.startswith(f"{batch_prefix}/{product_code}/")
+
+
+def image_previews_from_draft_row(draft_row: dict[str, str]) -> list[dict[str, str | int]]:
+    previews = []
+    for index, header in enumerate(IMAGE_FIELDS, start=1):
+        if draft_row.get(header, "").strip():
+            previews.append({"index": index, "header": header})
+    return previews
 
 
 def upload_approved_csv(batch_id: str, csv_text: str) -> str:

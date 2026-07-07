@@ -71,6 +71,36 @@ def test_item_page_renders_main_fields(monkeypatch):
     assert b"Main Fields" in response.data
 
 
+def test_item_page_renders_image_previews_through_proxy(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setattr(
+        module,
+        "get_review_item",
+        lambda batch_id, product_code: (
+            {"review_status": "needs_review", "reason": "image review"},
+            {
+                module.TITLE_FIELD: "Coach shoulder bag",
+                module.IMAGE_FIELDS[0]: (
+                    "https://storage.googleapis.com/product-images/"
+                    "exports/2026-07-07/A0001/001.jpg"
+                ),
+                module.IMAGE_FIELDS[1]: (
+                    "https://storage.googleapis.com/product-images/"
+                    "exports/2026-07-07/A0001/002.jpg"
+                ),
+            },
+        ),
+    )
+
+    response = module.app.test_client().get("/batches/2026-07-07/items/A0001")
+
+    assert response.status_code == 200
+    assert b"Images" in response.data
+    assert b'<img src="https://storage.googleapis.com' not in response.data
+    assert b"/batches/2026-07-07/items/A0001/images/1" in response.data
+    assert b"/batches/2026-07-07/items/A0001/images/2" in response.data
+
+
 def test_batch_page_uses_batch_scoped_items(monkeypatch):
     module = load_review_ui_module()
     item = SimpleNamespace(
