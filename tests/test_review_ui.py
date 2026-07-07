@@ -219,6 +219,7 @@ def test_item_image_proxies_private_gcs_image(monkeypatch):
 
     assert response.status_code == 200
     assert response.mimetype == "image/jpeg"
+    assert response.headers["Cache-Control"] == "private, max-age=300"
     assert response.data == b"fake-jpeg-bytes"
     assert fake_client.bucket_obj.requested_object_name == "exports/2026-07-07/A0001/001.jpg"
 

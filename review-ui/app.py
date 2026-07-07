@@ -99,7 +99,11 @@ def create_app() -> Flask:
         if not blob.exists():
             abort(404)
         content_type = blob.content_type or guess_type(object_name)[0] or "application/octet-stream"
-        return Response(blob.download_as_bytes(), mimetype=content_type)
+        return Response(
+            blob.download_as_bytes(),
+            mimetype=content_type,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
 
     @app.get("/batches/<path:batch_id>/items/<product_code>")
     def item_detail(batch_id: str, product_code: str):
