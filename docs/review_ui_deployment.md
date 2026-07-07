@@ -142,3 +142,13 @@ The Cloud Run service account also needs:
 - Generate one approved CSV and verify it is saved to
   `exports/{batch_id}/approved/mercari_shops.csv`.
 - Download the CSV from the UI and test upload to Mercari Shops.
+
+## Optional approved CSV function
+
+The older `export_approved_mercari_csv` HTTP function is a fallback for
+rebuilding `Approved_Mercari_CSV` without the Review UI. It mutates Google
+Sheets, so it accepts POST requests only:
+
+```powershell
+curl -X POST "$FunctionUrl?batch_prefix=exports/YOUR_BATCH_ID"
+```
