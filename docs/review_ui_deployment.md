@@ -11,6 +11,7 @@ Review UI. Do not run these commands until deployment is explicitly approved.
 - Allowed user: `hirabaaiwork@gmail.com`
 - Spreadsheet ID: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
 - Approved CSV object path: `exports/{batch_id}/approved/mercari_shops.csv`
+- `FLASK_SECRET_KEY`: required on Cloud Run
 - Cost guardrails:
   - `--min-instances=0`
   - `--max-instances=1`
@@ -47,6 +48,7 @@ $ProductBucketName = "YOUR_EXISTING_PRODUCT_BUCKET"
 $SpreadsheetId = "16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc"
 $AllowedUser = "hirabaaiwork@gmail.com"
 $ProjectNumber = "YOUR_PROJECT_NUMBER"
+$FlaskSecretKey = "REPLACE_WITH_RANDOM_SECRET"
 ```
 
 Enable required APIs only if they are not already enabled:
@@ -90,7 +92,7 @@ gcloud run deploy $ServiceName `
   --cpu=1 `
   --no-allow-unauthenticated `
   --iap `
-  --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv"
+  --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,FLASK_SECRET_KEY=$FlaskSecretKey"
 ```
 
 Grant Cloud Run invoker permission to the IAP service agent:
@@ -124,6 +126,7 @@ The Cloud Run service account also needs:
 
 - Confirm billing budget/alert is configured before any deployment.
 - Confirm the existing product bucket name.
+- Prepare a random `FLASK_SECRET_KEY`.
 - Confirm Cloud Run IAP can be enabled in the target project.
 - Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
 - Generate one approved CSV and verify it is saved to

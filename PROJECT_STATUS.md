@@ -12,6 +12,9 @@
 - batch一覧、商品一覧、商品編集、商品承認、batch単位の承認済みCSV生成・ダウンロード画面を追加。
 - `sheets_workflow.py` にbatch一覧、商品取得、下書き更新、承認、承認済みCSVテキスト生成の共通処理を追加。
 - 承認済みCSVのGCS保存先は `exports/{batch_id}/approved/mercari_shops.csv`。
+- 編集画面は `Save & Approve` で下書き保存後に承認する方式にし、保存前の内容を誤って承認しないようにした。
+- Review UIのPOST操作にCSRF tokenを追加した。
+- Cloud Run上では `FLASK_SECRET_KEY` を必須にした。
 
 ### 本番前に確認すること
 - Cloud Run `review-ui` のIAPまたはGoogle認証設定。

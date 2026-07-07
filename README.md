@@ -462,6 +462,7 @@ Google Sheetsを直接編集する代わりに、`review-ui` をCloud Runへデ�
 - 商品一覧: 画像サムネイル、商品管理コード、商品名、review理由、承認状態を表示します。
 - 商品編集: 商品名、商品説明、価格、ブランドID、カテゴリID、状態、SKU1種類、在庫数、画像URLを編集できます。
 - CSV全列編集: 必要な場合のみ詳細欄からMercari CSV全列を編集できます。
+- 承認: 編集画面では `Save & Approve` で下書きを保存してから承認します。保存前の内容を誤って承認しないため、単独の承認ボタンは置きません。
 - CSV生成: `approved` の商品だけを最終CSVへ出力します。
 
 ### 環境変数
@@ -482,6 +483,8 @@ Dockerfileは `review-ui/Dockerfile` を使います。Cloud BuildやCloud Run�
 本番ではCloud Runの認証を必須にし、Google認証/IAPでアクセスできるユーザーを制限してください。未認証公開は想定していません。
 
 具体的な本番デプロイ案は `docs/review_ui_deployment.md` に記録しています。初期設定ではCloud Run direct IAPを使い、許可ユーザーを `hirabaaiwork@gmail.com` に限定します。課金回避のため、実デプロイ前にbudget/alert、Cloud Runの `min-instances=0`、`max-instances=1`、Artifact Registry画像の削除運用を確認してください。
+
+Review UIのPOST操作にはCSRF tokenを付けます。Cloud Run上では `FLASK_SECRET_KEY` が未設定の場合、起動に失敗します。
 
 ### 運用手順
 

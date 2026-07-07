@@ -7,9 +7,6 @@
       <p>{{ product_code }} / {{ review_row.get("review_status") }}</p>
     </div>
     <div class="heading-actions">
-      <form method="post" action="{{ url_for('approve_item', batch_id=batch_id, product_code=product_code) }}">
-        <button class="button button--primary" type="submit">Approve</button>
-      </form>
       <a class="button" href="{{ url_for('batch_detail', batch_id=batch_id) }}">Back</a>
     </div>
   </section>
@@ -25,6 +22,7 @@
   </section>
 
   <form class="edit-form" method="post" action="{{ url_for('update_item', batch_id=batch_id, product_code=product_code) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <section class="form-section">
       <h2>Main Fields</h2>
       <div class="form-grid">
@@ -66,7 +64,8 @@
     </details>
 
     <div class="sticky-actions">
-      <button class="button button--primary" type="submit">Save</button>
+      <button class="button" type="submit" name="action" value="save">Save</button>
+      <button class="button button--primary" type="submit" name="action" value="save_approve">Save &amp; Approve</button>
     </div>
   </form>
 {% endblock %}

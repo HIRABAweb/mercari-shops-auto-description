@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, abort, flash, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, flash, redirect, render_template, request, session, url_for
 from google.cloud import storage
 
 
@@ -47,7 +48,8 @@ def create_app() -> Flask:
         template_folder=str(Path(__file__).resolve().parent / "templates"),
         static_folder=str(Path(__file__).resolve().parent / "static"),
     )
-    app.secret_key = os.getenv("FLASK_SECRET_KEY", "local-review-ui-secret")
+    app.secret_key = flask_secret_key()
+    app.jinja_env.globals["csrf_token"] = csrf_token
 
     @app.get("/")
     def batches():
@@ -88,6 +90,7 @@ def create_app() -> Flask:
 
     @app.post("/batches/<path:batch_id>/items/<product_code>")
     def update_item(batch_id: str, product_code: str):
+        validate_csrf_token()
         updates = {
             header: request.form.get(header, "")
             for header in MERCARI_HEADERS
@@ -97,12 +100,17 @@ def create_app() -> Flask:
             update_draft_item(batch_id, product_code, updates)
         except KeyError:
             abort(404)
+        if request.form.get("action") == "save_approve":
+            approve_review_item(batch_id, product_code, current_utc_timestamp())
+            flash("Draft saved and item approved.")
+            return redirect(url_for("batch_detail", batch_id=batch_id))
         flash("Draft saved.")
         return redirect(url_for("item_detail", batch_id=batch_id, product_code=product_code))
 
     @app.post("/batches/<path:batch_id>/items/<product_code>/approve")
     def approve_item(batch_id: str, product_code: str):
-        approved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        validate_csrf_token()
+        approved_at = current_utc_timestamp()
         try:
             approve_review_item(batch_id, product_code, approved_at)
         except KeyError:
@@ -112,6 +120,7 @@ def create_app() -> Flask:
 
     @app.post("/batches/<path:batch_id>/export")
     def export_batch(batch_id: str):
+        validate_csrf_token()
         exported_count, csv_text = export_approved_mercari_rows_and_csv(
             normalize_batch_prefix(batch_id)
         )
@@ -147,6 +156,34 @@ def required_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"{name} is required.")
     return value
+
+
+def flask_secret_key() -> str:
+    value = os.getenv("FLASK_SECRET_KEY", "").strip()
+    if value:
+        return value
+    if os.getenv("K_SERVICE"):
+        raise RuntimeError("FLASK_SECRET_KEY is required on Cloud Run.")
+    return "local-review-ui-secret"
+
+
+def csrf_token() -> str:
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def validate_csrf_token() -> None:
+    expected = session.get("csrf_token")
+    actual = request.form.get("csrf_token")
+    if not expected or not actual or not secrets.compare_digest(expected, actual):
+        abort(400)
+
+
+def current_utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def approved_csv_object_name(batch_id: str) -> str:
