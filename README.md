@@ -1,17 +1,70 @@
 # Mercari Shops / Yahooオークション 自動出品CSV生成ツール
 
-商品画像と採寸・状態メモから、メルカリShops用CSVとYahooオークション用CSVを生成するGoogle Cloud Functions構成のツールです。
+## 採用担当者向け要約
 
-最終目標は、外注スタッフが商品フォルダへ以下だけをアップロードすれば出品用CSVが生成される状態です。
+個人で運営していたリユース事業の出品作業を効率化するために開発した、生成AIとGoogle Cloudを使ったEC出品支援MVPです。
+
+商品画像と採寸・状態メモをGoogle Cloud Storageへ配置すると、Cloud Run Functionsが起動し、Geminiを用いて商品説明や商品属性を生成し、メルカリShops向けCSVとYahooオークション向けCSVを出力します。
+
+現時点の安定版では、メルカリShopsへのCSVアップロード、下書き保存、下書き画面での商品画像表示まで実機検証済みです。Yahooオークション向けCSV生成機能も実装していますが、Yahooオークション側への実投入は未検証です。
+
+このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、このPRではGoogle Sheets / Review UIを使った承認フローを追加しています。
+
+---
+
+## 現在の公開状態
+
+| 区分 | 状態 | 補足 |
+|---|---|---|
+| main | 安定版MVP | GCS上にCSV/JSONを出力する構成 |
+| PR #6 | 最新開発ブランチ | Google Sheets承認フローとReview UIを追加 |
+| PR #5 | 旧プロトタイプ | PR #6へ役割を移しているため、現時点では参照優先度を下げる |
+
+採用・ポートフォリオ用途では、まずmainを安定版として見せ、PR #6を「次期改善・開発中の承認フロー」として説明します。
+
+---
+
+## 検証状況
+
+| 項目 | 状態 |
+|---|---|
+| メルカリShops向けCSV生成 | 実装済み |
+| メルカリShops CSVアップロード | 実機検証済み |
+| メルカリShops下書き保存 | 実機検証済み |
+| 下書き画面での商品画像表示 | 実機検証済み |
+| Yahooオークション向けCSV生成 | 実装済み |
+| YahooオークションへのCSV実投入 | 未検証 |
+| Google Sheets承認フロー | PR #6で追加中 |
+| Review UI | PR #6で追加中 |
+
+Yahooオークション側は、公開資料や面接では「Yahooオークション向けCSV生成機能」と表現します。「Yahooオークション出品まで実機検証済み」とは表現しません。
+
+---
+
+## 入力仕様
+
+外注スタッフまたは運用者が商品フォルダへアップロードするものは、通常運用では以下のみです。
 
 - 商品画像
 - `_SUCCESS.txt`
 
-スプレッドシートは中間管理には使わず、最終成果物はCloud Storage上のCSVとJSONです。
+`_SUCCESS.txt` の本文に、採寸、状態、特記事項などの商品メモを書きます。`product_info.txt` は通常運用の入力ファイルとして使いません。
+
+入力イメージ:
+
+```text
+products/
+  sample-item/
+    001.jpg
+    002.jpg
+    _SUCCESS.txt
+```
+
+---
 
 ## 出力物
 
-`yahuoku-to-mercarishops` は `_description.txt` を入力として処理し、次の構成で成果物を保存します。
+安定版のmainでは、Cloud Storage上に以下の成果物を出力します。
 
 ```text
 exports/
@@ -23,7 +76,11 @@ exports/
     _DONE.txt
 ```
 
-`_DONE.txt` はCSVとJSONの生成が成功した場合のみ最後に作成されます。
+`_DONE.txt` はCSVとJSONの生成が成功した場合のみ最後に作成します。
+
+PR #6でGoogle Sheets承認フローを有効にする場合も、既存のGCS成果物は維持します。
+
+---
 
 ## 全体フロー
 
@@ -31,17 +88,22 @@ exports/
 flowchart TD
     A[商品画像をGCSへアップロード] --> B[_SUCCESS.txtをアップロード]
     B --> C[image-to-description]
-    C --> D[画像と採寸情報から_description.txtを生成]
+    C --> D[_description.txtを生成]
     D --> E[yahuoku-to-mercarishops]
-    E --> F[AI JSONを解析]
-    F --> G[Pythonでタイトルと説明文を整形]
-    G --> H[ブランドマスタとカテゴリマスタを照合]
-    H --> I[mercari.csv / yahoo.csvを生成]
-    H --> J[必要時のみreview_required.csvへ確認項目を出力]
-    I --> K[result.jsonを保存]
+    E --> F[Geminiで商品属性を抽出]
+    F --> G[CSV行を生成]
+    G --> H[ブランド/カテゴリマスタ照合]
+    H --> I[mercari.csv / yahoo.csv]
+    H --> J[必要時のみreview_required.csv]
+    I --> K[result.json]
     J --> K
-    K --> L[_DONE.txtを保存]
+    K --> L[_DONE.txt]
+    H --> M[Google Sheets同期（PR #6 / 任意）]
+    M --> N[Review UIで確認・承認（PR #6）]
+    N --> O[Approved_Mercari_CSV / approved CSV]
 ```
+
+---
 
 ## サービス構成
 
@@ -51,269 +113,42 @@ flowchart TD
 
 ### yahuoku-to-mercarishops
 
-`_description.txt` のアップロードをトリガーに、出品CSVを生成します。
+`_description.txt` のアップロードをトリガーに、メルカリShops向けCSVとYahooオークション向けCSVを生成します。
 
 主な処理は次の通りです。
 
 - 同じ商品フォルダ内の画像URLをファイル名順に取得
-- GeminiからJSON形式の商品属性を取得
-- 商品タイトルをPython側で生成
-- 説明文から `タイトル：` / `商品名：` / `説明文：` などの見出しを除去
+- Geminiから商品属性を取得
+- 商品タイトル・商品説明をCSV仕様に合わせて整形
 - ブランド名をブランドマスタからブランドIDへ変換
 - カテゴリ情報をカテゴリマスタからカテゴリIDへ変換
 - 低信頼度またはマスタ未一致の項目を `review_required.csv` へ出力
 - メルカリShops用CSVとYahooオークション用CSVを列名ベースで生成
 - 処理結果を `result.json` に保存
+- `SPREADSHEET_ID` が設定されている場合のみGoogle Sheetsへ同期する
 
-## Google Cloud Run Functionsへのデプロイ
+### review-ui（PR #6）
 
-このリポジトリには実際のGoogle CloudプロジェクトID、バケット名、シークレット名、APIキー本体は含めません。環境ごとに異なる値はCloud Run Functionsの環境変数として設定します。
+PR #6では、Cloud Run上で動かすレビュー用フロントエンドを追加しています。
 
-APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはSecret Managerのシークレット名だけを渡します。
+Review UIでは、Google Sheets上の下書き行を確認・編集し、承認済みの行だけをメルカリShops投入用CSVとして再生成します。
 
-### 必須環境変数
+---
 
-#### image-to-description
+## メルカリShopsの商品画像
 
-| 環境変数 | 用途 | 例 |
-| --- | --- | --- |
-| `PROJECT_ID` | Vertex AIを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
-| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
-| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/image-description.txt` |
-| `VERTEX_LOCATION` | Vertex AIのリージョン | `asia-northeast1` |
-| `VERTEX_MODEL` | Vertex AI Geminiモデル名 | `gemini-2.5-flash` |
+メルカリShops用CSVでは、`商品画像名_1` 〜 `商品画像名_20` にGCS公開画像URLを出力します。
 
-#### yahuoku-to-mercarishops
-
-| 環境変数 | 用途 | 例 |
-| --- | --- | --- |
-| `PROJECT_ID` | Secret Managerを利用するGoogle CloudプロジェクトID | `your-gcp-project-id` |
-| `SECRET_NAME` | Gemini APIキーを保存したSecret Managerのシークレット名 | `gemini-api-key` |
-| `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット名 | `your-prompt-bucket` |
-| `PROMPT_FILE_NAME` | プロンプトファイルのオブジェクト名 | `prompts/listing-attributes.txt` |
-| `GEMINI_MODEL` | Gemini APIモデル名 | `gemini-2.5-flash-lite` |
-| `SPREADSHEET_ID` | Phase 1 Google Sheets承認ワークフローを使う場合の出力先Spreadsheet ID。未設定の場合は既存のGCS CSV/JSON出力のみ行います。 | `your-google-spreadsheet-id` |
-
-ローカル確認用のサンプルは `.env.example` にあります。実際の値を書く `.env` はGit管理しません。
-
-### Secret Manager
-
-Gemini APIキーはSecret Managerへ保存します。
-
-```powershell
-gcloud secrets create gemini-api-key --replication-policy="automatic"
-gcloud secrets versions add gemini-api-key --data-file="path/to/api-key.txt"
-```
-
-`api-key.txt` や実際のAPIキー文字列はGitHubへコミットしません。
-
-### デプロイコマンド例
-
-`YOUR_REGION`、`YOUR_PRODUCT_BUCKET`、`YOUR_PROMPT_BUCKET`、`YOUR_PROJECT_ID` は自分の環境の値に置き換えてください。
-
-#### image-to-description
-
-- source directory: `image-to-description`
-- entry point: `generate_description_from_trigger`
-- trigger bucket: 商品画像と `_SUCCESS.txt` をアップロードするGCSバケット
-
-```powershell
-gcloud functions deploy image-to-description `
-  --gen2 `
-  --runtime=python312 `
-  --region=YOUR_REGION `
-  --source=image-to-description `
-  --entry-point=generate_description_from_trigger `
-  --trigger-bucket=YOUR_PRODUCT_BUCKET `
-  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/image-description.txt,VERTEX_LOCATION=asia-northeast1,VERTEX_MODEL=gemini-2.5-flash
-```
-
-#### yahuoku-to-mercarishops
-
-- source directory: `yahuoku-to-mercarishops`
-- entry point: `generate_dual_listing`
-- trigger bucket: `image-to-description` が `_description.txt` を保存するGCSバケット
-
-```powershell
-gcloud functions deploy yahuoku-to-mercarishops `
-  --gen2 `
-  --runtime=python312 `
-  --region=YOUR_REGION `
-  --source=yahuoku-to-mercarishops `
-  --entry-point=generate_dual_listing `
-  --trigger-bucket=YOUR_PRODUCT_BUCKET `
-  --set-env-vars=PROJECT_ID=YOUR_PROJECT_ID,SECRET_NAME=gemini-api-key,PROMPT_BUCKET_NAME=YOUR_PROMPT_BUCKET,PROMPT_FILE_NAME=prompts/listing-attributes.txt,GEMINI_MODEL=gemini-2.5-flash-lite
-```
-
-Phase 1のGoogle Sheets承認ワークフローを有効にする場合は、同じFunctionに `SPREADSHEET_ID=YOUR_SPREADSHEET_ID` も設定します。未設定の場合、従来どおりCloud Storage上の `mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json`、`_DONE.txt` のみを出力します。
-
-承認済みメルカリShops用CSVをGoogle Sheets上に再生成するHTTP entrypointは、同じソースから別Functionとしてデプロイします。
-
-```powershell
-gcloud functions deploy export-approved-mercari-csv `
-  --gen2 `
-  --runtime=python312 `
-  --region=YOUR_REGION `
-  --source=yahuoku-to-mercarishops `
-  --entry-point=export_approved_mercari_csv `
-  --trigger-http `
-  --set-env-vars=SPREADSHEET_ID=YOUR_SPREADSHEET_ID
-```
-
-実行時はbatch混在を避けるため、POST requestのHTTP query parameterで `batch_prefix=exports/{batch_id}` を必ず指定します。GET requestでは再生成しません。
-
-### Google Cloud Consoleで環境変数を設定する手順
-
-1. Google Cloud Consoleで対象のCloud Run Functionsを開く
-2. `編集` を選択する
-3. `ランタイム、ビルド、接続、セキュリティの設定` を開く
-4. `ランタイム環境変数` に必要な環境変数を追加する
-5. `デプロイ` を選択する
-
-Secret Managerに保存したAPIキー本体は環境変数へ直接入力しません。`SECRET_NAME` にはシークレット名だけを入力します。
-
-### 必要なIAM
-
-Cloud Run Functionsの実行サービスアカウントには、少なくとも次の権限が必要です。
-
-- 商品画像・トリガーファイル・出力CSVを扱うGCSバケットへの読み書き権限
-- プロンプトを置くGCSバケットへの読み取り権限
-- `image-to-description` 用の Vertex AI 利用権限
-- `yahuoku-to-mercarishops` 用の Secret Manager Secret Accessor 権限
-- Cloud Storageトリガーを受けるためのEventarc関連権限
-
-## AI出力仕様
-
-`yahuoku-to-mercarishops` では、AIに完成タイトルやIDを作らせません。AIは商品属性だけをJSONで返します。
-
-```json
-{
-  "description": "商品説明本文",
-  "brand_name": "D&G",
-  "category_name": "ジャケット",
-  "gender": "メンズ",
-  "item_type": "ダウンジャケット",
-  "material": "ナイロン",
-  "color": "ブラック",
-  "pattern": "無地",
-  "size": "46",
-  "condition": "美品",
-  "confidence": {
-    "brand": 0.9,
-    "category": 0.85
-  }
-}
-```
-
-Markdownコードフェンス付きJSONにも対応しています。JSON解析に失敗した場合や必須本文が空の場合は、誤ったCSVを出力しないように例外で停止します。
-
-## タイトル生成
-
-タイトルはPython側で、次の順序を基本として生成します。
-
-```text
-状態 ブランド アイテム名 素材 色 柄 サイズ
-```
-
-空の項目は省略し、同じ単語の重複を避けます。`タイトル`、`商品名`、`説明文` などの見出しは含めません。
-
-例:
-
-```text
-美品 D&G ダウンジャケット ナイロン ブラック 46
-```
-
-## CSV生成方針
-
-CSVは列番号ではなく列名ベースで生成します。
-
-```python
-row["商品名"] = title
-row["商品説明"] = description
-row["ブランドID"] = brand_id
-```
-
-この方針により、旧実装で発生していたスプレッドシート `append_row()` による列ずれを回避します。
-
-メルカリShops CSVヘッダーは公式サポートページから取得した `yahuoku-to-mercarishops/resources/mercari/product_import_template_sample.csv` の1行目を利用します。Yahooオークション側は現時点では既存定義を維持しています。
-
-### メルカリShopsの商品画像
-
-メルカリShops用CSVでは、`商品画像名_1` 〜 `商品画像名_20` にGCS公開画像URLをそのまま出力します。外注スタッフが商品画像をGCSへアップロードしていれば、メルカリShopsへ同じ画像を別途アップロードする必要はありません。
-
-ただし、CSV投入時にメルカリShops側から画像URLへアクセスできる必要があります。非公開バケットやアクセス制限されたURLの場合、メルカリShopsが画像を取得できず商品登録に失敗する可能性があります。
+この方式により、商品画像をメルカリShopsへ別途アップロードする二重作業を避けられます。ただし、CSV投入時にメルカリShops側から画像URLへアクセスできる必要があります。
 
 運用上の注意点:
 
-- 画像URLは、少なくともメルカリShopsへのCSV投入と商品登録確認が終わるまでは削除しない
-- 画像ファイル名には日本語・空白・特殊記号を避け、可能なら英数字・ハイフン・アンダースコアを使う
-- 画像順序はファイル名内の数字順で決まるため、`001.jpg`, `002.jpg` のように連番を付ける
-- Yahooオークション用CSVも従来どおり画像URLを出力する
+- 画像URLは、少なくともCSV投入と商品登録確認が終わるまでは削除しない
+- 画像ファイル名には日本語・空白・特殊記号を避ける
+- 画像順序はファイル名内の数字順で決まるため、`001.jpg`, `002.jpg` のような連番を推奨する
+- メルカリShops画像は最大20枚まで扱う
 
-### 実機検証済み範囲
-
-- メルカリShops: `mercari.csv` のアップロードと下書き保存まで実機検証済みです。
-- Yahooオークション: `yahoo.csv` の生成処理は実装済みで、既存テストで回帰確認しています。
-- Yahooオークション: 実際の出品画面または一括出品ツールへのCSV投入は未検証です。
-
-公開資料やポートフォリオでは、Yahooオークション側は「Yahooオークション向けCSV生成機能」と表現し、「Yahooオークション出品まで実機検証済み」とは表現しないでください。
-
-## ブランドマスタ
-
-ブランドIDはAIに生成させず、ブランド名をマスタで照合します。
-
-想定配置:
-
-```text
-masters/brand_master.csv
-```
-
-推奨列:
-
-```csv
-ブランドID,ブランド名,ブランド名（カナ）,ブランド名（英語）
-123,Dolce&Gabbana,ドルチェアンドガッバーナ,Dolce&Gabbana
-```
-
-`aliases` は `|` 区切りです。標準で `D&G`、`Dolce&Gabbana`、`ドルガバ`、`ドルチェ&ガッバーナ` などは同一ブランドとして扱う補助辞書を持っています。
-
-## カテゴリマスタ
-
-カテゴリIDはAIに生成させず、性別・カテゴリ名・商品種別をマスタで照合します。
-
-想定配置:
-
-```text
-masters/category_master_updated.csv
-```
-
-推奨列:
-
-```csv
-カテゴリID,カテゴリ名,カテゴリ名（フル）
-456,ダウンジャケット,ファッション > メンズ > ジャケット・アウター > ダウンジャケット
-```
-
-カテゴリ信頼度が低い、またはマスタに一致しない場合は `review_required.csv` へ確認項目を出力します。
-
-## サイズ処理
-
-現時点ではメルカリShopsのネイティブサイズ設定は対象外です。
-
-サイズは次の場所へ反映します。
-
-- 商品名
-- 商品説明
-- メルカリShops CSVの `SKU1_種類`
-- Yahooオークション CSVの `サイズ`
-
-例:
-
-```text
-46
-M相当
-26.5cm
-```
+---
 
 ## review_required.csv
 
@@ -328,176 +163,96 @@ M相当
 - ブランドIDが特定できない
 - カテゴリIDが特定できない
 - AIのカテゴリ信頼度がしきい値未満
+- 人間確認が必要な生成結果がある
 
-## Phase 1 Google Sheets承認ワークフロー
+---
 
-`SPREADSHEET_ID` を設定すると、既存のGCS成果物に加えてGoogle Sheetsへ次のワークシートを出力します。
+## PR #6: Google Sheets承認フロー / Review UI
+
+PR #6では、既存のGCS成果物を維持したまま、Google SheetsとReview UIを使った人間確認フローを追加しています。
+
+追加する主な要素:
 
 - `Draft_Mercari_List`: メルカリShops用CSVと同じヘッダーの下書き行
 - `Review_List`: 商品ごとの確認理由と `review_status`
-- `Approved_Mercari_CSV`: `review_status` が `approved` の行だけを再生成した最終CSV用シート
+- `Approved_Mercari_CSV`: `approved` の行だけを再生成した最終CSV用シート
 - `Yahoo_List`: Yahooオークション向けCSV行
+- `review-ui/`: Cloud Run上で動かすレビュー用フロントエンド
+- `export_approved_mercari_csv`: 承認済みCSVを再生成するHTTP entrypoint
 
-通常のGCS出力は維持します。Sheets同期が有効な場合、`mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json` とSheets同期が成功した後に `_DONE.txt` を作成します。Sheets同期に失敗した場合は `_DONE.txt` を作らず、Cloud Functionsのリトライ対象にします。
+Google Sheets同期が有効な場合、`mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json` とSheets同期が成功した後に `_DONE.txt` を作成します。Sheets同期に失敗した場合は `_DONE.txt` を作らず、Cloud Functionsのリトライ対象にします。
 
-`Draft_Mercari_List` と `Yahoo_List` は先頭画像URLを冪等キーとして扱うため、同じ商品管理コードが別batchで再利用されても、画像URLが異なれば別商品として扱えます。`Review_List` は `batch_prefix/product_code` をキーにし、既存行がある場合は手動編集を保護するため追記しません。
+承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで、Review UIまたは `export_approved_mercari_csv` から指定batchのCSVを再生成します。
 
-承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで `export_approved_mercari_csv?batch_prefix=exports/{batch_id}` へPOSTします。指定batchのreview行がない場合は、既存の `Approved_Mercari_CSV` を変更せずにエラー終了します。
+本番利用前には、Cloud Run IAP、サービスアカウント権限、Spreadsheet編集権限、Review UIの画像表示、CSV再投入を確認します。
 
-## result.json
+---
 
-処理結果をJSONで保存します。
+## Google Cloud Run Functionsへのデプロイ方針
 
-```json
-{
-  "success": true,
-  "product_code": "sample-item",
-  "batch_id": "sample-item",
-  "category_id": "456",
-  "brand_id": "123",
-  "review_required": false,
-  "processing_time": 1.235,
-  "outputs": {
-    "mercari_csv": "exports/sample-item/mercari.csv",
-    "yahoo_csv": "exports/sample-item/yahoo.csv",
-    "review_required_csv": "exports/sample-item/review_required.csv",
-    "result_json": "exports/sample-item/result.json",
-    "done": "exports/sample-item/_DONE.txt"
-  }
-}
-```
+このリポジトリには、実際のGoogle CloudプロジェクトID、バケット名、シークレット名、APIキー本体は含めません。環境ごとに異なる値はCloud Run Functionsの環境変数として設定します。
 
-## ディレクトリ構成
+APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはSecret Managerのシークレット名だけを渡します。
 
-```text
-image-to-description/
-  main.py
-  requirements.txt
-  prompt.txt
+代表的な環境変数:
 
-yahuoku-to-mercarishops/
-  main.py
-  ai_service.py
-  brand_mapper.py
-  category_mapper.py
-  csv_export.py
-  listing_data.py
-  sheets_workflow.py
-  title_builder.py
-  requirements.txt
+| 関数 | 環境変数 | 用途 |
+|---|---|---|
+| image-to-description | `PROJECT_ID` | Vertex AIを利用するGCPプロジェクトID |
+| image-to-description | `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット |
+| image-to-description | `PROMPT_FILE_NAME` | 画像説明生成用プロンプト |
+| image-to-description | `VERTEX_LOCATION` | Vertex AIリージョン |
+| image-to-description | `VERTEX_MODEL` | Vertex AI Geminiモデル |
+| yahuoku-to-mercarishops | `PROJECT_ID` | Secret Manager利用プロジェクト |
+| yahuoku-to-mercarishops | `SECRET_NAME` | Gemini APIキーのSecret名 |
+| yahuoku-to-mercarishops | `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット |
+| yahuoku-to-mercarishops | `PROMPT_FILE_NAME` | 商品属性抽出用プロンプト |
+| yahuoku-to-mercarishops | `GEMINI_MODEL` | Gemini APIモデル |
+| yahuoku-to-mercarishops | `SPREADSHEET_ID` | PR #6のSheets承認フローを使う場合のみ設定 |
+| review-ui | `SPREADSHEET_ID` | Review UIが参照するSpreadsheet |
+| review-ui | `PRODUCT_BUCKET_NAME` | 商品画像・成果物を参照するGCS bucket |
+| review-ui | `FLASK_SECRET_KEY` | Flask session / CSRF用secret |
 
-tests/
-  test_listing_content_parser.py
-  test_listing_data.py
-  test_csv_export.py
-  test_sheets_workflow.py
-  test_mappers.py
-  test_main.py
-```
+`.env`、APIキー、実際のGCPプロジェクトID、実バケット名、Spreadsheet ID、secret値はGit管理しません。
+
+---
 
 ## テスト
 
-正式な回帰確認コマンドは次の通りです。
+通常のテスト:
 
-```powershell
+```bash
+python -m pytest -p no:cacheprovider tests
+```
+
+重複したテストファイル名を含む検証:
+
+```bash
 python -m pytest -q tests
-```
-
-`image-to-description` 単体のCloud Storageイベントハンドラ用テストは次のコマンドで確認します。
-
-```powershell
 python -m pytest -q image-to-description/test_image_description.py
-```
-
-両方をまとめて確認する場合は次のコマンドを使用します。このリポジトリでは `tests/test_image_description.py` と `image-to-description/test_image_description.py` の同名テストファイルを同時収集できるように、pytestのimport modeを `importlib` に固定しています。
-
-```powershell
 python -m pytest -q tests image-to-description/test_image_description.py
 ```
 
-主に次を検証しています。
+PR #6のReview UI関連テスト:
 
-- 正常なJSONとMarkdownコードフェンス付きJSONの解析
-- 見出し除去と説明文保持
-- 空の説明文の検出
-- Python側タイトル生成
-- ブランド別名解決
-- カテゴリ解決と低信頼度レビュー判定
-- CSVの列名ベース生成
-- 出力成果物パスと `_DONE.txt` 作成順
-- 処理失敗時に元ファイルを処理済みにしないこと
+```bash
+python -m pytest -p no:cacheprovider tests/test_review_ui.py tests/test_sheets_workflow.py
+```
 
-## 必要な主なライブラリ
+---
 
-- functions-framework
-- google-cloud-storage
-- google-cloud-secret-manager
-- google-generativeai
-- google-auth
-- gspread
+## 採用・面接での説明方針
 
-## 現在の制約
+安全で正確な説明:
 
-- メルカリShopsの公式テンプレート、ブランドマスタ、カテゴリマスタは同梱済みです。将来テンプレートが更新された場合は再取得が必要です。
-- ブランドIDとカテゴリIDの精度は、`masters/brand_master.csv` と `masters/category_master_updated.csv` の整備品質に依存します。
-- メルカリShopsのネイティブサイズ設定は今回の対象外です。
-- 複数商品を1バッチで集約する構造は将来対応を見据えていますが、現在の実装は1商品フォルダ単位で成果物を生成します。
-- AI生成内容は最終公開前に人が確認する前提です。
+```text
+リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発しました。メルカリShopsへのCSVアップロード、下書き保存、画像表示までは実機検証済みです。現在はAI出力を人間が確認・承認できるよう、Google SheetsとReview UIを使った承認フローを開発中です。
+```
 
-## Phase 1 Review UI
+避ける表現:
 
-Google Sheetsを直接編集する代わりに、`review-ui` をCloud Runへデプロイして、商品ごとの確認・修正・承認・CSV生成をWeb画面で行えます。
+```text
+メルカリShopsとYahooオークションへの自動出品を完全実現しました。
+```
 
-### 役割
-
-- `Draft_Mercari_List` をメルカリShops用CSVの下書きデータとして読み書きします。
-- `Review_List` の `review_status` を商品単位で `approved` に更新します。
-- `Approved_Mercari_CSV` を指定batchの承認済み商品のみで再生成します。
-- 同じCSV内容をGCSへ `exports/{batch_id}/approved/mercari_shops.csv` として保存し、Web画面からダウンロードできるようにします。
-- `Yahoo_List` は初期版では参照対象です。Yahoo向けCSVの既存挙動は変更しません。
-
-### 初期版の画面
-
-- batch一覧: `Review_List` からbatchごとの全商品数、承認済み数、未承認数を表示します。
-- 商品一覧: 画像サムネイル、商品管理コード、商品名、review理由、承認状態を表示します。
-- 商品編集: 画像プレビューを確認しながら、商品名、商品説明、価格、ブランドID、カテゴリID、状態、SKU1種類、在庫数、画像URLを編集できます。
-- CSV全列編集: 必要な場合のみ詳細欄からMercari CSV全列を編集できます。
-- 承認: 編集画面では `Save & Approve` で下書きを保存してから承認します。保存前の内容を誤って承認しないため、単独の承認ボタンは置きません。`Save` のみ実行した場合は、再確認のため未承認状態に戻します。
-- CSV生成: `approved` の商品だけを最終CSVへ出力します。承認済み商品が0件の場合、アップロード用CSVは生成せず、既存の `Approved_Mercari_CSV` も変更しません。
-
-### 環境変数
-
-| 環境変数 | 用途 | 例 |
-| --- | --- | --- |
-| `SPREADSHEET_ID` | Phase 1 workflowのSpreadsheet ID | `your-google-spreadsheet-id` |
-| `PRODUCT_BUCKET_NAME` | 商品画像を読み取り、承認済みCSVを保存するGCS bucket | `your-product-bucket` |
-| `APPROVED_CSV_OBJECT_TEMPLATE` | 承認済みCSVの保存先テンプレート | `exports/{batch_id}/approved/mercari_shops.csv` |
-| `FLASK_SECRET_KEY` | 画面メッセージ用のFlask secret | ランダムな文字列 |
-
-### デプロイ方針
-
-`review-ui` は既存の2つのCloud Functionsとは別のCloud Runサービスとしてデプロイします。既存の `_SUCCESS.txt` 生成処理、`_description.txt` 変換処理、GCS成果物出力は維持します。
-
-Dockerfileは `review-ui/Dockerfile` を使います。Cloud BuildやCloud Runでビルドする場合は、リポジトリルートをビルドコンテキストにしてください。`review-ui` 単体をコンテキストにすると、既存の `yahuoku-to-mercarishops` 側のCSVヘッダーやSheets共通ロジックを参照できません。
-
-Cloud Buildでは `cloudbuild.review-ui.yaml` を使い、`review-ui/Dockerfile` を明示します。
-
-本番ではCloud Runの認証を必須にし、Google認証/IAPでアクセスできるユーザーを制限してください。未認証公開は想定していません。
-
-具体的な本番デプロイ案は `docs/review_ui_deployment.md` に記録しています。初期設定ではCloud Run direct IAPを使い、許可ユーザーを `hirabaaiwork@gmail.com` に限定します。課金回避のため、実デプロイ前にbudget/alert、Cloud Runの `min-instances=0`、`max-instances=1`、Artifact Registry画像の削除運用を確認してください。
-
-本番前に運用者が確認することは `docs/user_action_checklist.md` にまとめています。
-
-Review UIのPOST操作にはCSRF tokenを付けます。Cloud Run上では `FLASK_SECRET_KEY` が未設定の場合、起動に失敗します。
-
-### 運用手順
-
-1. 外注者が `exports/{batch_id}/{item_id}/` に商品画像と `_SUCCESS.txt` をアップロードします。
-2. 既存Cloud Functionsが `_description.txt`、GCS成果物、Google Sheets下書きを生成します。
-3. 運用者はReview UIでbatchを開き、確認が必要な商品を修正します。
-4. 問題がなければ商品を承認します。
-5. batch単位で「承認済みCSV生成」を実行します。
-6. Web画面から `mercari_shops.csv` をダウンロードします。
-7. ダウンロードしたCSVをメルカリShopsへアップロードし、メルカリShops画面上で最終確認して出品します。
-
-`review_required.csv` は引き続き確認項目の記録です。メルカリShopsへ直接アップロードするCSVではありません。
+理由: Yahooオークションへの実投入は未検証であり、AI生成結果も人間確認を前提としているためです。
