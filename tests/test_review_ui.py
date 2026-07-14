@@ -125,6 +125,11 @@ def test_batch_page_uses_batch_scoped_items(monkeypatch):
         review_status="needs_review",
     )
     monkeypatch.setattr(module, "list_review_items", lambda batch_id: [item])
+    monkeypatch.setattr(
+        module,
+        "restore_batch_items_from_gcs",
+        lambda batch_id: pytest.fail("batch page should not mutate Sheets"),
+    )
 
     response = module.app.test_client().get("/batches/2026-07-07")
 
@@ -380,60 +385,14 @@ def test_download_redirects_when_csv_has_not_been_generated(monkeypatch):
     assert response.headers["Location"].endswith("/batches/2026-07-07")
 
 
-def test_item_page_restores_missing_draft_from_gcs(monkeypatch):
+def test_item_page_redirects_when_draft_is_missing(monkeypatch):
     module = load_review_ui_module()
-    calls = {"get": 0, "ensured": []}
-
-    def fake_get_review_item(batch_id, product_code):
-        calls["get"] += 1
-        if calls["get"] == 1:
-            raise KeyError("missing draft")
-        return (
-            {"review_status": "needs_review", "reason": "category review"},
-            {
-                module.TITLE_FIELD: "Restored title",
-                module.DESCRIPTION_FIELD: "Restored description",
-                "SKU1_商品管理コード": product_code,
-            },
-        )
-
-    class FakeBlob:
-        name = "exports/exports%2F2026-07-07%2FA0001/mercari.csv"
-
-        def exists(self):
-            return True
-
-        def download_as_text(self, encoding="utf-8-sig"):
-            return (
-                "商品画像名_1,商品名,商品説明,SKU1_商品管理コード\n"
-                "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg,"
-                "Restored title,Restored description,A0001\n"
-            )
-
-    class FakeBucket:
-        def blob(self, object_name):
-            assert object_name == "exports/exports%2F2026-07-07%2FA0001/mercari.csv"
-            return FakeBlob()
-
-    class FakeStorageClient:
-        def bucket(self, bucket_name):
-            assert bucket_name == "product-images"
-            return FakeBucket()
-
-    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
-    monkeypatch.setattr(module, "get_review_item", fake_get_review_item)
-    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
-    monkeypatch.setattr(
-        module,
-        "ensure_draft_item",
-        lambda batch_id, product_code, row: calls["ensured"].append((batch_id, product_code, row)),
-    )
+    monkeypatch.setattr(module, "get_review_item", lambda batch_id, product_code: (_ for _ in ()).throw(KeyError("missing")))
 
     response = module.app.test_client().get("/batches/2026-07-07/items/A0001")
 
-    assert response.status_code == 200
-    assert b"Restored title" in response.data
-    assert calls["ensured"][0][0:2] == ("2026-07-07", "A0001")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/batches/2026-07-07")
 
 
 def test_restore_batch_items_from_gcs_repairs_review_and_draft(monkeypatch):
@@ -444,6 +403,9 @@ def test_restore_batch_items_from_gcs_repairs_review_and_draft(monkeypatch):
         def __init__(self, name, text):
             self.name = name
             self.text = text
+
+        def exists(self):
+            return True
 
         def download_as_text(self, encoding="utf-8"):
             return self.text
@@ -486,7 +448,7 @@ def test_restore_batch_items_from_gcs_repairs_review_and_draft(monkeypatch):
 
         def list_blobs(self, bucket_name, prefix):
             assert bucket_name == "product-images"
-            assert prefix == "exports/"
+            assert prefix == "exports/exports%2F2026-07-07%2F"
             return [blobs["exports/exports%2F2026-07-07%2FA0001/result.json"]]
 
     monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
@@ -502,15 +464,56 @@ def test_restore_batch_items_from_gcs_repairs_review_and_draft(monkeypatch):
         lambda *args: calls["draft"].append(args) or True,
     )
 
-    restored_count = module.restore_batch_items_from_gcs("2026-07-07")
+    result = module.restore_batch_items_from_gcs("2026-07-07")
 
-    assert restored_count == 2
+    assert result.artifacts_found == 1
+    assert result.review_added == 1
+    assert result.draft_added == 1
+    assert result.errors == []
     assert calls["review"][0][0:3] == (
         "exports/2026-07-07",
         "A0001",
         "exports/2026-07-07/A0001/_description.txt",
     )
     assert calls["draft"][0][0:2] == ("exports/2026-07-07", "A0001")
+
+
+def test_repair_post_runs_gcs_restore(monkeypatch):
+    module = load_review_ui_module()
+    client = module.app.test_client()
+    calls = []
+    monkeypatch.setattr(
+        module,
+        "restore_batch_items_from_gcs",
+        lambda batch_id: calls.append(batch_id) or module.RepairResult(
+            artifacts_found=2,
+            review_added=1,
+            draft_added=1,
+            skipped=1,
+            errors=[],
+        ),
+    )
+
+    response = client.post(
+        "/batches/2026-07-07/repair",
+        data={"csrf_token": csrf_from_session(client)},
+    )
+
+    assert response.status_code == 302
+    assert calls == ["2026-07-07"]
+
+
+def test_repair_post_rejects_missing_csrf(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setattr(
+        module,
+        "restore_batch_items_from_gcs",
+        lambda batch_id: pytest.fail("repair should require CSRF"),
+    )
+
+    response = module.app.test_client().post("/batches/2026-07-07/repair")
+
+    assert response.status_code == 400
 
 
 def test_export_post_rejects_missing_csrf(monkeypatch):

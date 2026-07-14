@@ -216,9 +216,14 @@ th {
 
 .item-code,
 .reason,
+.hint,
 .empty {
   color: var(--muted);
   font-size: 13px;
+}
+
+.hint {
+  margin-top: 4px;
 }
 
 .reason {

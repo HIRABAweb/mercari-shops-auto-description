@@ -6,8 +6,18 @@
       <h1>{{ batch_id }}</h1>
       <p><code>{{ batch_prefix }}</code></p>
       <p>{{ approved_count }} / {{ total_count }} approved. CSV generation includes approved items only.</p>
+      {% if approved_count == 0 %}
+        <p class="hint">Save &amp; Approve at least one item before generating CSV.</p>
+      {% endif %}
+      {% if not approved_csv_available %}
+        <p class="hint">Download becomes available after Generate CSV succeeds.</p>
+      {% endif %}
     </div>
     <div class="heading-actions">
+      <form method="post" action="{{ url_for('repair_batch', batch_id=batch_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="button" type="submit">Repair from GCS</button>
+      </form>
       <form method="post" action="{{ url_for('export_batch', batch_id=batch_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="button button--primary" type="submit" {{ 'disabled' if approved_count == 0 else '' }}>Generate CSV</button>
