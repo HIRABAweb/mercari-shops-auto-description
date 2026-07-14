@@ -101,9 +101,25 @@ def get_or_create_worksheet(spreadsheet, sheet_name: str):
 
 
 def ensure_sheet_header(worksheet, headers: list[str]) -> None:
-    if worksheet_values(worksheet):
+    values = worksheet_values(worksheet)
+    if not values:
+        update_worksheet_row(worksheet, 1, headers, len(headers))
         return
-    worksheet.append_row(headers)
+
+    first_row = values[0]
+    if row_is_header(first_row, headers):
+        if first_row[: len(headers)] != headers:
+            update_worksheet_row(worksheet, 1, headers, len(headers))
+        return
+
+    worksheet.insert_row(headers, index=1, value_input_option="RAW")
+
+
+def row_is_header(row: list[str], headers: list[str]) -> bool:
+    if not row or not headers:
+        return False
+    comparable_length = min(len(row), len(headers))
+    return row[:comparable_length] == headers[:comparable_length]
 
 
 def column_letter(column_number: int) -> str:
@@ -189,7 +205,7 @@ def append_row_if_missing(
 ) -> bool:
     if worksheet_contains_value(worksheet, idempotency_column, idempotency_value):
         return False
-    worksheet.append_row(row, value_input_option="RAW")
+    append_sheet_row(worksheet, row, len(row))
     return True
 
 
@@ -206,7 +222,7 @@ def append_row_if_missing_by_value(
 ) -> bool:
     if worksheet_contains_any_value(worksheet, idempotency_value):
         return False
-    worksheet.append_row(row, value_input_option="RAW")
+    append_sheet_row(worksheet, row, len(row))
     return True
 
 
@@ -217,11 +233,17 @@ def append_draft_row_if_missing(
 ) -> bool:
     if find_draft_row_number(worksheet, review_key) is not None:
         return False
-    worksheet.append_row(
+    append_sheet_row(
+        worksheet,
         dict_row_to_list(MERCARI_HEADERS, mercari_row),
-        value_input_option="RAW",
+        len(MERCARI_HEADERS),
     )
     return True
+
+
+def append_sheet_row(worksheet, row: list[str], column_count: int) -> None:
+    row_number = len(worksheet_values(worksheet)) + 1
+    update_worksheet_row(worksheet, row_number, row, column_count)
 
 
 def update_worksheet_row(worksheet, row_number: int, row: list[str], column_count: int) -> None:

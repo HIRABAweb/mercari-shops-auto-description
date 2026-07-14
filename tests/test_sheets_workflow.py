@@ -29,6 +29,9 @@ class FakeWorksheet:
         self.appended_rows.append(row)
         self.values.append(row)
 
+    def insert_row(self, row, index=1, **kwargs):
+        self.values.insert(index - 1, row)
+
     def col_values(self, column_number):
         index = column_number - 1
         return [row[index] for row in self.values if len(row) > index]
@@ -113,6 +116,40 @@ def test_write_phase1_sheet_rows_creates_headers_and_is_idempotent(monkeypatch):
     assert "brand review" in review.values[1][5]
     assert yahoo.values[0] == YAHOO_HEADERS
     assert len(yahoo.values) == 2
+
+
+def test_ensure_sheet_header_inserts_header_when_first_row_is_data(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    image_url = "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001.jpg"
+    existing_data_row = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(image_url, "A0001"),
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [existing_data_row],
+    )
+
+    sheets_workflow.ensure_draft_item(
+        "exports/2026-07-06",
+        "A0002",
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0002/001.jpg",
+            "A0002",
+        ),
+    )
+
+    draft = spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI]
+    assert draft.values[0] == MERCARI_HEADERS
+    assert sheets_workflow.draft_row_matches_review_key(
+        draft.values[1],
+        "exports/2026-07-06/A0001",
+    )
+    assert sheets_workflow.draft_row_matches_review_key(
+        draft.values[2],
+        "exports/2026-07-06/A0002",
+    )
 
 
 def test_write_phase1_sheet_rows_appends_draft_when_image_url_exists_without_matching_key(monkeypatch):
