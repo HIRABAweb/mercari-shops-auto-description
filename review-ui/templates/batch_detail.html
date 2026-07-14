@@ -12,7 +12,11 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="button button--primary" type="submit" {{ 'disabled' if approved_count == 0 else '' }}>Generate CSV</button>
       </form>
-      <a class="button" href="{{ url_for('download_batch', batch_id=batch_id) }}">Download CSV</a>
+      {% if approved_csv_available %}
+        <a class="button" href="{{ url_for('download_batch', batch_id=batch_id) }}">Download CSV</a>
+      {% else %}
+        <span class="button button--disabled" aria-disabled="true">Download CSV</span>
+      {% endif %}
     </div>
   </section>
 

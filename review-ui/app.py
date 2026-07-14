@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import csv
+import io
+import json
 import secrets
 import sys
 from datetime import datetime, timezone
 from mimetypes import guess_type
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from flask import Flask, Response, abort, flash, redirect, render_template, request, session, url_for
 from google.cloud import storage
@@ -19,11 +22,13 @@ YAHUOKU_DIR = ROOT_DIR / "yahuoku-to-mercarishops"
 if str(YAHUOKU_DIR) not in sys.path:
     sys.path.insert(0, str(YAHUOKU_DIR))
 
-from csv_export import MERCARI_HEADERS  # noqa: E402
+from csv_export import MERCARI_HEADERS, REVIEW_REQUIRED_HEADERS  # noqa: E402
 from listing_data import IMAGE_EXTENSIONS  # noqa: E402
 from sheets_workflow import (  # noqa: E402
     approve_review_item,
     batch_id_from_prefix,
+    ensure_draft_item,
+    ensure_review_item,
     export_approved_mercari_rows_and_csv,
     get_review_item,
     list_batch_summaries,
@@ -65,14 +70,17 @@ def create_app() -> Flask:
 
     @app.get("/batches/<path:batch_id>")
     def batch_detail(batch_id: str):
+        restore_batch_items_from_gcs(batch_id)
         items = list_review_items(batch_id)
+        approved_count = approved_item_count(items)
         return render_template(
             "batch_detail.html",
             batch_id=batch_id,
             batch_prefix=normalize_batch_prefix(batch_id),
             items=items,
-            approved_count=approved_item_count(items),
+            approved_count=approved_count,
             total_count=len(items),
+            approved_csv_available=approved_csv_exists(batch_id),
         )
 
     @app.get("/batches/<path:batch_id>/items/<product_code>/images/<int:image_index>")
@@ -82,7 +90,12 @@ def create_app() -> Flask:
         try:
             _, draft_row = get_review_item(batch_id, product_code)
         except KeyError:
-            abort(404)
+            if not restore_draft_item_from_gcs(batch_id, product_code):
+                abort(404)
+            try:
+                _, draft_row = get_review_item(batch_id, product_code)
+            except KeyError:
+                abort(404)
 
         image_url = draft_row.get(IMAGE_FIELDS[image_index - 1], "")
         blob_ref = storage_url_to_blob_ref(image_url)
@@ -111,7 +124,12 @@ def create_app() -> Flask:
         try:
             review_row, draft_row = get_review_item(batch_id, product_code)
         except KeyError:
-            abort(404)
+            if not restore_draft_item_from_gcs(batch_id, product_code):
+                abort(404)
+            try:
+                review_row, draft_row = get_review_item(batch_id, product_code)
+            except KeyError:
+                abort(404)
         extra_fields = [
             header
             for header in MERCARI_HEADERS
@@ -142,7 +160,12 @@ def create_app() -> Flask:
         try:
             update_draft_item(batch_id, product_code, updates)
         except KeyError:
-            abort(404)
+            if not restore_draft_item_from_gcs(batch_id, product_code):
+                abort(404)
+            try:
+                update_draft_item(batch_id, product_code, updates)
+            except KeyError:
+                abort(404)
         if request.form.get("action") == "save_approve":
             approve_review_item(batch_id, product_code, current_utc_timestamp())
             flash("Draft saved and item approved.")
@@ -172,7 +195,8 @@ def create_app() -> Flask:
         bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
         blob = bucket.blob(object_name)
         if not blob.exists():
-            abort(404)
+            flash("Approved CSV has not been generated yet. Approve at least one item and generate it first.")
+            return redirect(url_for("batch_detail", batch_id=batch_id))
         csv_text = blob.download_as_text(encoding="utf-8-sig")
         return Response(
             csv_text,
@@ -225,6 +249,105 @@ def current_utc_timestamp() -> str:
 def approved_csv_object_name(batch_id: str) -> str:
     normalized_batch_id = batch_id_from_prefix(normalize_batch_prefix(batch_id))
     return APPROVED_CSV_OBJECT_TEMPLATE.format(batch_id=normalized_batch_id)
+
+
+def approved_csv_exists(batch_id: str) -> bool:
+    try:
+        object_name = approved_csv_object_name(batch_id)
+        bucket_name = required_env("PRODUCT_BUCKET_NAME")
+        bucket = storage_client().bucket(bucket_name)
+        return bucket.blob(object_name).exists()
+    except Exception:
+        return False
+
+
+def restore_draft_item_from_gcs(batch_id: str, product_code: str) -> bool:
+    try:
+        csv_text = download_mercari_artifact_csv(batch_id, product_code)
+        mercari_row = first_mercari_csv_row(csv_text)
+        if not mercari_row:
+            return False
+        ensure_draft_item(batch_id, product_code, mercari_row)
+        return True
+    except Exception:
+        return False
+
+
+def restore_batch_items_from_gcs(batch_id: str) -> int:
+    restored = 0
+    try:
+        bucket_name = required_env("PRODUCT_BUCKET_NAME")
+        bucket = storage_client().bucket(bucket_name)
+        batch_prefix = normalize_batch_prefix(batch_id)
+        for result_blob in storage_client().list_blobs(bucket_name, prefix="exports/"):
+            artifact = artifact_from_result_blob_name(result_blob.name)
+            if not artifact or artifact["batch_prefix"] != batch_prefix:
+                continue
+            product_code = artifact["product_code"]
+            result_data = json.loads(result_blob.download_as_text(encoding="utf-8"))
+            outputs = result_data.get("outputs", {})
+            mercari_row = first_mercari_csv_row(
+                bucket.blob(outputs.get("mercari_csv", "")).download_as_text(encoding="utf-8-sig")
+            )
+            if not mercari_row:
+                continue
+            review_rows = review_required_csv_rows(
+                bucket.blob(outputs.get("review_required_csv", "")).download_as_text(
+                    encoding="utf-8-sig"
+                )
+            )
+            file_path = artifact["file_path"]
+            if ensure_review_item(batch_prefix, product_code, file_path, review_rows):
+                restored += 1
+            if ensure_draft_item(batch_prefix, product_code, mercari_row):
+                restored += 1
+    except Exception:
+        return restored
+    return restored
+
+
+def artifact_from_result_blob_name(object_name: str) -> dict[str, str] | None:
+    if not object_name.startswith("exports/") or not object_name.endswith("/result.json"):
+        return None
+    encoded_folder = object_name.removeprefix("exports/").removesuffix("/result.json")
+    folder_path = unquote(encoded_folder)
+    parts = [part for part in folder_path.split("/") if part]
+    if len(parts) < 3 or parts[0] != "exports":
+        return None
+    product_code = parts[-1]
+    batch_prefix = "/".join(parts[:-1])
+    return {
+        "batch_prefix": batch_prefix,
+        "product_code": product_code,
+        "file_path": f"{folder_path}/_description.txt",
+    }
+
+
+def download_mercari_artifact_csv(batch_id: str, product_code: str) -> str:
+    bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
+    artifact_prefix = quote(
+        f"{normalize_batch_prefix(batch_id).strip('/')}/{product_code}",
+        safe="",
+    )
+    blob = bucket.blob(f"exports/{artifact_prefix}/mercari.csv")
+    if not blob.exists():
+        raise FileNotFoundError(blob.name)
+    return blob.download_as_text(encoding="utf-8-sig")
+
+
+def first_mercari_csv_row(csv_text: str) -> dict[str, str] | None:
+    reader = csv.DictReader(io.StringIO(csv_text))
+    for row in reader:
+        return {header: row.get(header, "") for header in MERCARI_HEADERS}
+    return None
+
+
+def review_required_csv_rows(csv_text: str) -> list[dict[str, str]]:
+    reader = csv.DictReader(io.StringIO(csv_text))
+    return [
+        {header: row.get(header, "") for header in REVIEW_REQUIRED_HEADERS}
+        for row in reader
+    ]
 
 
 def storage_url_to_blob_ref(image_url: str) -> tuple[str, str] | None:

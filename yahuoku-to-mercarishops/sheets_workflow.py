@@ -189,7 +189,7 @@ def append_row_if_missing(
 ) -> bool:
     if worksheet_contains_value(worksheet, idempotency_column, idempotency_value):
         return False
-    worksheet.append_row(row)
+    worksheet.append_row(row, value_input_option="RAW")
     return True
 
 
@@ -206,7 +206,21 @@ def append_row_if_missing_by_value(
 ) -> bool:
     if worksheet_contains_any_value(worksheet, idempotency_value):
         return False
-    worksheet.append_row(row)
+    worksheet.append_row(row, value_input_option="RAW")
+    return True
+
+
+def append_draft_row_if_missing(
+    worksheet,
+    mercari_row: dict[str, str],
+    review_key: str,
+) -> bool:
+    if find_draft_row_number(worksheet, review_key) is not None:
+        return False
+    worksheet.append_row(
+        dict_row_to_list(MERCARI_HEADERS, mercari_row),
+        value_input_option="RAW",
+    )
     return True
 
 
@@ -215,7 +229,7 @@ def update_worksheet_row(worksheet, row_number: int, row: list[str], column_coun
     worksheet.update(
         values=[row],
         range_name=f"A{row_number}:{end_column}{row_number}",
-        value_input_option="USER_ENTERED",
+        value_input_option="RAW",
     )
 
 
@@ -471,7 +485,6 @@ def write_phase1_sheet_rows(
     ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
     ensure_sheet_header(yahoo_sheet, YAHOO_HEADERS)
 
-    mercari_key = first_url_value(mercari_row) or product_code
     yahoo_key = first_url_value(yahoo_row) or product_code
     batch_prefix = batch_prefix_from_folder(folder_path)
     review_row = build_review_sheet_row(
@@ -480,18 +493,51 @@ def write_phase1_sheet_rows(
         file_path=file_path,
         review_rows=review_rows,
     )
+    review_key = review_row[0]
 
-    append_row_if_missing_by_value(
-        mercari_sheet,
-        dict_row_to_list(MERCARI_HEADERS, mercari_row),
-        mercari_key,
-    )
-    append_row_if_missing(review_sheet, review_row, 1, review_row[0])
+    append_draft_row_if_missing(mercari_sheet, mercari_row, review_key)
+    append_row_if_missing(review_sheet, review_row, 1, review_key)
     append_row_if_missing_by_value(
         yahoo_sheet,
         dict_row_to_list(YAHOO_HEADERS, yahoo_row),
         yahoo_key,
     )
+
+
+def ensure_draft_item(
+    batch_id_or_prefix: str,
+    product_code: str,
+    mercari_row: dict[str, str],
+) -> bool:
+    spreadsheet = get_spreadsheet()
+    draft_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_DRAFT_MERCARI)
+    ensure_sheet_header(draft_sheet, MERCARI_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    review_key = review_item_key(batch_prefix, product_code)
+    mercari_row = dict(mercari_row)
+    mercari_row[MERCARI_PRODUCT_CODE_HEADER] = product_code
+    return append_draft_row_if_missing(draft_sheet, mercari_row, review_key)
+
+
+def ensure_review_item(
+    batch_id_or_prefix: str,
+    product_code: str,
+    file_path: str,
+    review_rows: list[dict[str, str]],
+) -> bool:
+    spreadsheet = get_spreadsheet()
+    review_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_REVIEW)
+    ensure_sheet_header(review_sheet, REVIEW_SHEET_HEADERS)
+
+    batch_prefix = normalize_batch_prefix(batch_id_or_prefix)
+    review_row = build_review_sheet_row(
+        batch_prefix=batch_prefix,
+        product_code=product_code,
+        file_path=file_path,
+        review_rows=review_rows,
+    )
+    return append_row_if_missing(review_sheet, review_row, 1, review_row[0])
 
 
 def approved_review_item_keys(review_sheet, batch_prefix: str) -> set[str]:

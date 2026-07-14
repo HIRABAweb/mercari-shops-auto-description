@@ -25,7 +25,7 @@ class FakeWorksheet:
     def get_all_values(self):
         return self.values
 
-    def append_row(self, row):
+    def append_row(self, row, **kwargs):
         self.appended_rows.append(row)
         self.values.append(row)
 
@@ -113,6 +113,97 @@ def test_write_phase1_sheet_rows_creates_headers_and_is_idempotent(monkeypatch):
     assert "brand review" in review.values[1][5]
     assert yahoo.values[0] == YAHOO_HEADERS
     assert len(yahoo.values) == 2
+
+
+def test_write_phase1_sheet_rows_appends_draft_when_image_url_exists_without_matching_key(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    image_url = "https://storage.googleapis.com/product-images/exports/2026-07-06/A0002/001.jpg"
+    stale_row = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(image_url, ""),
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS, stale_row],
+    )
+
+    sheets_workflow.write_phase1_sheet_rows(
+        mercari_row=mercari_row(image_url, "A0002"),
+        yahoo_row=yahoo_row(image_url),
+        review_rows=[],
+        folder_path="exports/2026-07-06/A0002",
+        product_code="A0002",
+        file_path="exports/2026-07-06/A0002/_description.txt",
+    )
+
+    draft = spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI]
+    assert len(draft.values) == 3
+    assert sheets_workflow.draft_row_matches_review_key(
+        draft.values[2],
+        "exports/2026-07-06/A0002",
+    )
+
+
+def test_ensure_draft_item_restores_missing_draft_row(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS],
+    )
+
+    restored = sheets_workflow.ensure_draft_item(
+        "2026-07-06",
+        "A0002",
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0002/001.jpg",
+            "",
+        ),
+    )
+    restored_again = sheets_workflow.ensure_draft_item(
+        "2026-07-06",
+        "A0002",
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0002/001.jpg",
+            "",
+        ),
+    )
+
+    draft = spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI]
+    assert restored is True
+    assert restored_again is False
+    assert len(draft.values) == 2
+    assert draft.values[1][MERCARI_HEADERS.index("SKU1_商品管理コード")] == "A0002"
+
+
+def test_ensure_review_item_restores_missing_review_row(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [sheets_workflow.REVIEW_SHEET_HEADERS],
+    )
+
+    restored = sheets_workflow.ensure_review_item(
+        "2026-07-06",
+        "A0002",
+        "exports/2026-07-06/A0002/_description.txt",
+        [],
+    )
+    restored_again = sheets_workflow.ensure_review_item(
+        "2026-07-06",
+        "A0002",
+        "exports/2026-07-06/A0002/_description.txt",
+        [],
+    )
+
+    review = spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW]
+    assert restored is True
+    assert restored_again is False
+    assert len(review.values) == 2
+    assert review.values[1][0] == "exports/2026-07-06/A0002"
+    assert review.values[1][3] == sheets_workflow.REVIEW_STATUS_APPROVED
 
 
 def test_export_approved_mercari_rows_filters_by_batch(monkeypatch):

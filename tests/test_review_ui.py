@@ -147,6 +147,7 @@ def test_batch_page_enables_export_when_item_is_approved(monkeypatch):
         review_status="approved",
     )
     monkeypatch.setattr(module, "list_review_items", lambda batch_id: [item])
+    monkeypatch.setattr(module, "approved_csv_exists", lambda batch_id: True)
 
     response = module.app.test_client().get("/batches/2026-07-07")
 
@@ -154,6 +155,25 @@ def test_batch_page_enables_export_when_item_is_approved(monkeypatch):
     assert b"Generate CSV" in response.data
     assert b"1 / 1 approved" in response.data
     assert b"disabled" not in response.data
+
+
+def test_batch_page_disables_download_when_approved_csv_is_missing(monkeypatch):
+    module = load_review_ui_module()
+    item = SimpleNamespace(
+        first_image_url="",
+        title="Coach shoulder bag",
+        product_code="A0001",
+        reason="",
+        review_status="approved",
+    )
+    monkeypatch.setattr(module, "list_review_items", lambda batch_id: [item])
+    monkeypatch.setattr(module, "approved_csv_exists", lambda batch_id: False)
+
+    response = module.app.test_client().get("/batches/2026-07-07")
+
+    assert response.status_code == 200
+    assert b"Download CSV" in response.data
+    assert b"button--disabled" in response.data
 
 
 def test_storage_url_to_blob_ref_accepts_storage_googleapis_url():
@@ -333,6 +353,164 @@ def test_export_post_does_not_upload_when_no_approved_rows(monkeypatch):
 
     assert response.status_code == 302
     assert uploaded == []
+
+
+def test_download_redirects_when_csv_has_not_been_generated(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+
+    class FakeBlob:
+        def exists(self):
+            return False
+
+    class FakeBucket:
+        def blob(self, object_name):
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return FakeBucket()
+
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+
+    response = module.app.test_client().get("/batches/2026-07-07/download")
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/batches/2026-07-07")
+
+
+def test_item_page_restores_missing_draft_from_gcs(monkeypatch):
+    module = load_review_ui_module()
+    calls = {"get": 0, "ensured": []}
+
+    def fake_get_review_item(batch_id, product_code):
+        calls["get"] += 1
+        if calls["get"] == 1:
+            raise KeyError("missing draft")
+        return (
+            {"review_status": "needs_review", "reason": "category review"},
+            {
+                module.TITLE_FIELD: "Restored title",
+                module.DESCRIPTION_FIELD: "Restored description",
+                "SKU1_商品管理コード": product_code,
+            },
+        )
+
+    class FakeBlob:
+        name = "exports/exports%2F2026-07-07%2FA0001/mercari.csv"
+
+        def exists(self):
+            return True
+
+        def download_as_text(self, encoding="utf-8-sig"):
+            return (
+                "商品画像名_1,商品名,商品説明,SKU1_商品管理コード\n"
+                "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg,"
+                "Restored title,Restored description,A0001\n"
+            )
+
+    class FakeBucket:
+        def blob(self, object_name):
+            assert object_name == "exports/exports%2F2026-07-07%2FA0001/mercari.csv"
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return FakeBucket()
+
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setattr(module, "get_review_item", fake_get_review_item)
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+    monkeypatch.setattr(
+        module,
+        "ensure_draft_item",
+        lambda batch_id, product_code, row: calls["ensured"].append((batch_id, product_code, row)),
+    )
+
+    response = module.app.test_client().get("/batches/2026-07-07/items/A0001")
+
+    assert response.status_code == 200
+    assert b"Restored title" in response.data
+    assert calls["ensured"][0][0:2] == ("2026-07-07", "A0001")
+
+
+def test_restore_batch_items_from_gcs_repairs_review_and_draft(monkeypatch):
+    module = load_review_ui_module()
+    calls = {"review": [], "draft": []}
+
+    class FakeBlob:
+        def __init__(self, name, text):
+            self.name = name
+            self.text = text
+
+        def download_as_text(self, encoding="utf-8"):
+            return self.text
+
+    result_text = (
+        '{"outputs": {'
+        '"mercari_csv": "exports/exports%2F2026-07-07%2FA0001/mercari.csv",'
+        '"review_required_csv": "exports/exports%2F2026-07-07%2FA0001/review_required.csv"'
+        "}}"
+    )
+    mercari_text = (
+        "商品画像名_1,商品名,商品説明,SKU1_商品管理コード\n"
+        "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg,"
+        "Restored title,Restored description,A0001\n"
+    )
+    review_text = "商品管理コード,確認項目,候補1,候補2,理由\nA0001,カテゴリID,,,カテゴリ不明\n"
+    blobs = {
+        "exports/exports%2F2026-07-07%2FA0001/result.json": FakeBlob(
+            "exports/exports%2F2026-07-07%2FA0001/result.json",
+            result_text,
+        ),
+        "exports/exports%2F2026-07-07%2FA0001/mercari.csv": FakeBlob(
+            "exports/exports%2F2026-07-07%2FA0001/mercari.csv",
+            mercari_text,
+        ),
+        "exports/exports%2F2026-07-07%2FA0001/review_required.csv": FakeBlob(
+            "exports/exports%2F2026-07-07%2FA0001/review_required.csv",
+            review_text,
+        ),
+    }
+
+    class FakeBucket:
+        def blob(self, object_name):
+            return blobs[object_name]
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return FakeBucket()
+
+        def list_blobs(self, bucket_name, prefix):
+            assert bucket_name == "product-images"
+            assert prefix == "exports/"
+            return [blobs["exports/exports%2F2026-07-07%2FA0001/result.json"]]
+
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+    monkeypatch.setattr(
+        module,
+        "ensure_review_item",
+        lambda *args: calls["review"].append(args) or True,
+    )
+    monkeypatch.setattr(
+        module,
+        "ensure_draft_item",
+        lambda *args: calls["draft"].append(args) or True,
+    )
+
+    restored_count = module.restore_batch_items_from_gcs("2026-07-07")
+
+    assert restored_count == 2
+    assert calls["review"][0][0:3] == (
+        "exports/2026-07-07",
+        "A0001",
+        "exports/2026-07-07/A0001/_description.txt",
+    )
+    assert calls["draft"][0][0:2] == ("exports/2026-07-07", "A0001")
 
 
 def test_export_post_rejects_missing_csrf(monkeypatch):

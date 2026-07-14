@@ -115,6 +115,11 @@ code {
   cursor: not-allowed;
 }
 
+.button--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .notice,
 .table-wrap,
 .review-panel,
