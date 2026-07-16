@@ -58,6 +58,39 @@ def test_healthz_does_not_touch_live_sheets(monkeypatch):
     assert response.text == "ok\n"
 
 
+def test_category_search_api_returns_ranked_candidates(monkeypatch, tmp_path):
+    module = load_review_ui_module()
+    category_master = tmp_path / "category_master_updated.csv"
+    category_master.write_text(
+        (
+            "\u30ab\u30c6\u30b4\u30eaID,"
+            "\u30ab\u30c6\u30b4\u30ea\u540d,"
+            "\u30ab\u30c6\u30b4\u30ea\u540d\uff08\u30d5\u30eb\uff09\n"
+            "razor,\u30e1\u30f3\u30ba\u5243\u5200,"
+            "\u30b3\u30b9\u30e1\u30fb\u7f8e\u5bb9 > \u7f8e\u5bb9\u5bb6\u96fb > \u30e1\u30f3\u30ba\u5243\u5200\n"
+            "mens-t,\u0054\u30b7\u30e3\u30c4,"
+            "\u30d5\u30a1\u30c3\u30b7\u30e7\u30f3 > \u30e1\u30f3\u30ba > \u30c8\u30c3\u30d7\u30b9 > \u0054\u30b7\u30e3\u30c4\n"
+            "goods-t,\u0054\u30b7\u30e3\u30c4\u30fb\u30a2\u30d1\u30ec\u30eb,"
+            "\u30b2\u30fc\u30e0 > \u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba > \u0054\u30b7\u30e3\u30c4\u30fb\u30a2\u30d1\u30ec\u30eb\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "CATEGORY_MASTER_PATH", category_master)
+    module.load_category_master_rows.cache_clear()
+
+    response = module.app.test_client().get(
+        "/api/categories",
+        query_string={"q": "\u30e1\u30f3\u30ba \u0054\u30b7\u30e3\u30c4"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["categories"][0]["category_id"] == "mens-t"
+    assert data["categories"][0]["all_terms_matched"] is True
+
+    module.load_category_master_rows.cache_clear()
+
+
 def test_item_page_renders_main_fields(monkeypatch):
     module = load_review_ui_module()
     monkeypatch.setattr(
@@ -83,6 +116,7 @@ def test_item_page_renders_main_fields(monkeypatch):
     assert b"Coach shoulder bag" in response.data
     assert b"brand review" in response.data
     assert b"Main Fields" in response.data
+    assert b"data-category-helper" in response.data
 
 
 def test_item_page_renders_image_previews_through_proxy(monkeypatch):

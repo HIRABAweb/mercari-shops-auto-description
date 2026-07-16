@@ -7,14 +7,16 @@ import io
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 from datetime import datetime, timezone
+from functools import lru_cache
 from mimetypes import guess_type
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
-from flask import Flask, Response, abort, flash, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from google.cloud import storage
 
 
@@ -50,7 +52,12 @@ PRIMARY_FIELD_INDICES = [20, 21, 73, 72, 74, 75, 22, 23]
 PRIMARY_FIELDS = [MERCARI_HEADERS[index] for index in PRIMARY_FIELD_INDICES]
 TITLE_FIELD = MERCARI_HEADERS[20]
 DESCRIPTION_FIELD = MERCARI_HEADERS[21]
+CATEGORY_ID_FIELD = MERCARI_HEADERS[73]
 IMAGE_FIELDS = MERCARI_HEADERS[:20]
+CATEGORY_MASTER_PATH = YAHUOKU_DIR / "resources" / "mercari" / "category_master_updated.csv"
+CATEGORY_MASTER_ID_HEADER = "\u30ab\u30c6\u30b4\u30eaID"
+CATEGORY_MASTER_NAME_HEADER = "\u30ab\u30c6\u30b4\u30ea\u540d"
+CATEGORY_MASTER_FULL_NAME_HEADER = "\u30ab\u30c6\u30b4\u30ea\u540d\uff08\u30d5\u30eb\uff09"
 
 
 class RepairResult:
@@ -86,6 +93,11 @@ def create_app() -> Flask:
     @app.get("/healthz")
     def healthz():
         return ("ok\n", 200, {"Content-Type": "text/plain; charset=utf-8"})
+
+    @app.get("/api/categories")
+    def category_search_api():
+        query = request.args.get("q", "")
+        return jsonify({"query": query, "categories": search_categories(query)})
 
     @app.get("/batches/<path:batch_id>")
     def batch_detail(batch_id: str):
@@ -163,6 +175,7 @@ def create_app() -> Flask:
             extra_fields=extra_fields,
             title_field=TITLE_FIELD,
             description_field=DESCRIPTION_FIELD,
+            category_field=CATEGORY_ID_FIELD,
         )
 
     @app.post("/batches/<path:batch_id>/items/<product_code>")
@@ -363,6 +376,86 @@ def repair_result_message(result: RepairResult) -> str:
     if result.errors:
         return f"{message} First errors: {'; '.join(result.errors[:3])}"
     return message
+
+
+@lru_cache(maxsize=1)
+def load_category_master_rows() -> tuple[dict[str, str], ...]:
+    with CATEGORY_MASTER_PATH.open(encoding="utf-8-sig", newline="") as category_file:
+        reader = csv.DictReader(category_file)
+        return tuple(
+            {
+                "category_id": (row.get(CATEGORY_MASTER_ID_HEADER) or "").strip(),
+                "category_name": (row.get(CATEGORY_MASTER_NAME_HEADER) or "").strip(),
+                "full_name": (row.get(CATEGORY_MASTER_FULL_NAME_HEADER) or "").strip(),
+            }
+            for row in reader
+            if (row.get(CATEGORY_MASTER_ID_HEADER) or "").strip()
+        )
+
+
+def search_categories(query: str, limit: int = 8) -> list[dict[str, str]]:
+    tokens = category_query_tokens(query)
+    if not tokens:
+        return []
+
+    scored = []
+    for row in load_category_master_rows():
+        score, all_terms_matched = category_match_score(row, tokens)
+        if score <= 0:
+            continue
+        scored.append((score, all_terms_matched, row))
+
+    scored.sort(
+        key=lambda item: (
+            -int(item[1]),
+            -item[0],
+            len(item[2]["full_name"]),
+            item[2]["full_name"],
+        )
+    )
+    return [
+        {
+            "category_id": row["category_id"],
+            "category_name": row["category_name"],
+            "full_name": row["full_name"],
+            "all_terms_matched": all_terms_matched,
+        }
+        for score, all_terms_matched, row in scored[:limit]
+    ]
+
+
+def category_query_tokens(query: str) -> list[str]:
+    return [
+        normalize_category_search_text(token)
+        for token in re.split(r"[\s\u3000]+", query)
+        if normalize_category_search_text(token)
+    ]
+
+
+def normalize_category_search_text(value: str) -> str:
+    return re.sub(r"[\s\u3000・/／>＞_\-ー]+", "", value.casefold())
+
+
+def category_match_score(row: dict[str, str], tokens: list[str]) -> tuple[int, bool]:
+    normalized_name = normalize_category_search_text(row["category_name"])
+    normalized_full_name = normalize_category_search_text(row["full_name"])
+    score = 0
+    missing = 0
+    for index, token in enumerate(tokens):
+        is_last_token = index == len(tokens) - 1
+        if token in normalized_name:
+            score += 20 if is_last_token else 12
+        elif token in normalized_full_name:
+            score += 10 if is_last_token else 6
+        else:
+            missing += 1
+
+    if score <= 0:
+        return 0, False
+    if row["category_name"] == "\u305d\u306e\u4ed6":
+        score -= 2
+    score -= missing * 3
+    return max(score, 0), missing == 0
 
 
 def artifact_from_result_blob_name(object_name: str) -> dict[str, str] | None:

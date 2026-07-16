@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import io
 import os
+import time
 from dataclasses import dataclass
+from functools import lru_cache
 
 from csv_export import MERCARI_HEADERS, REVIEW_REQUIRED_HEADERS, YAHOO_HEADERS
 
@@ -41,6 +43,10 @@ WORKSHEET_SPECS = {
     SHEET_NAME_YAHOO: (1000, len(YAHOO_HEADERS)),
 }
 
+SHEETS_CACHE_TTL_SECONDS = 15
+_WORKSHEET_CACHE = {}
+_WORKSHEET_VALUES_CACHE = {}
+
 
 @dataclass(frozen=True)
 class BatchSummary:
@@ -71,6 +77,7 @@ def phase1_sheets_enabled() -> bool:
     return bool(os.getenv("SPREADSHEET_ID", "").strip())
 
 
+@lru_cache(maxsize=1)
 def get_spreadsheet():
     import google.auth
     import gspread
@@ -88,16 +95,57 @@ def get_spreadsheet():
 
 
 def worksheet_values(worksheet) -> list[list[str]]:
-    return worksheet.get_all_values() or []
+    cache_key = worksheet_cache_key(worksheet)
+    now = time.monotonic()
+    if cache_key is not None:
+        cached = _WORKSHEET_VALUES_CACHE.get(cache_key)
+        if cached and now - cached[0] <= SHEETS_CACHE_TTL_SECONDS:
+            return [row[:] for row in cached[1]]
+
+    values = worksheet.get_all_values() or []
+    if cache_key is not None:
+        _WORKSHEET_VALUES_CACHE[cache_key] = (now, [row[:] for row in values])
+    return values
 
 
 def get_or_create_worksheet(spreadsheet, sheet_name: str):
+    cache_key = spreadsheet_cache_key(spreadsheet, sheet_name)
+    if cache_key is not None:
+        cached = _WORKSHEET_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
     for worksheet in spreadsheet.worksheets():
         if worksheet.title == sheet_name:
+            if cache_key is not None:
+                _WORKSHEET_CACHE[cache_key] = worksheet
             return worksheet
 
     rows, columns = WORKSHEET_SPECS[sheet_name]
-    return spreadsheet.add_worksheet(title=sheet_name, rows=rows, cols=columns)
+    worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=rows, cols=columns)
+    if cache_key is not None:
+        _WORKSHEET_CACHE[cache_key] = worksheet
+    return worksheet
+
+
+def spreadsheet_cache_key(spreadsheet, sheet_name: str):
+    spreadsheet_id = getattr(spreadsheet, "id", "")
+    if not spreadsheet_id:
+        return None
+    return spreadsheet_id, sheet_name
+
+
+def worksheet_cache_key(worksheet):
+    spreadsheet_id = getattr(worksheet, "spreadsheet_id", "")
+    if not spreadsheet_id:
+        return None
+    return spreadsheet_id, getattr(worksheet, "title", "")
+
+
+def invalidate_worksheet_values_cache(worksheet) -> None:
+    cache_key = worksheet_cache_key(worksheet)
+    if cache_key is not None:
+        _WORKSHEET_VALUES_CACHE.pop(cache_key, None)
 
 
 def ensure_sheet_header(worksheet, headers: list[str]) -> None:
@@ -113,6 +161,7 @@ def ensure_sheet_header(worksheet, headers: list[str]) -> None:
         return
 
     worksheet.insert_row(headers, index=1, value_input_option="RAW")
+    invalidate_worksheet_values_cache(worksheet)
 
 
 def row_is_header(row: list[str], headers: list[str]) -> bool:
@@ -143,6 +192,7 @@ def replace_sheet_rows(worksheet, rows: list[list[str]], column_count: int) -> N
         worksheet.batch_clear(
             [f"A{len(rows) + 1}:{column_letter(column_count)}{existing_row_count}"]
         )
+    invalidate_worksheet_values_cache(worksheet)
 
 
 def dict_row_to_list(headers: list[str], row: dict[str, str]) -> list[str]:
@@ -253,6 +303,7 @@ def update_worksheet_row(worksheet, row_number: int, row: list[str], column_coun
         range_name=f"A{row_number}:{end_column}{row_number}",
         value_input_option="RAW",
     )
+    invalidate_worksheet_values_cache(worksheet)
 
 
 def first_url_value(row: dict[str, str]) -> str:

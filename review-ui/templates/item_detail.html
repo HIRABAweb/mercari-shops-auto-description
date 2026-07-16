@@ -45,6 +45,15 @@
             <span>{{ header }}</span>
             {% if header == description_field %}
               <textarea name="{{ header }}" rows="10">{{ draft_row.get(header, "") }}</textarea>
+            {% elif header == category_field %}
+              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}" data-category-id-input>
+              <div class="category-helper" data-category-helper data-search-url="{{ url_for('category_search_api') }}">
+                <div class="category-search-row">
+                  <input type="search" placeholder="例: メンズ Tシャツ" data-category-query>
+                  <button class="button" type="button" data-category-search>Search</button>
+                </div>
+                <div class="category-results" data-category-results></div>
+              </div>
             {% else %}
               <input name="{{ header }}" value="{{ draft_row.get(header, "") }}">
             {% endif %}
@@ -82,4 +91,82 @@
       <button class="button button--primary" type="submit" name="action" value="save_approve">Save &amp; Approve</button>
     </div>
   </form>
+  <script>
+    document.querySelectorAll("[data-category-helper]").forEach((helper) => {
+      const idInput = helper.closest("label").querySelector("[data-category-id-input]");
+      const queryInput = helper.querySelector("[data-category-query]");
+      const searchButton = helper.querySelector("[data-category-search]");
+      const results = helper.querySelector("[data-category-results]");
+      const searchUrl = helper.dataset.searchUrl;
+
+      const setMessage = (message) => {
+        results.replaceChildren();
+        const element = document.createElement("p");
+        element.className = "category-empty";
+        element.textContent = message;
+        results.appendChild(element);
+      };
+
+      const renderCategories = (categories) => {
+        results.replaceChildren();
+        if (!categories.length) {
+          setMessage("候補が見つかりませんでした。別の言葉で検索してください。");
+          return;
+        }
+        categories.forEach((category) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "category-option";
+          if (!category.all_terms_matched) {
+            button.classList.add("category-option--partial");
+          }
+
+          const name = document.createElement("span");
+          name.className = "category-option__name";
+          name.textContent = category.category_name;
+
+          const fullName = document.createElement("span");
+          fullName.className = "category-option__path";
+          fullName.textContent = category.full_name;
+
+          const id = document.createElement("code");
+          id.textContent = category.category_id;
+
+          button.append(name, fullName, id);
+          button.addEventListener("click", () => {
+            idInput.value = category.category_id;
+            queryInput.value = category.full_name || category.category_name;
+          });
+          results.appendChild(button);
+        });
+      };
+
+      const search = async () => {
+        const query = queryInput.value.trim();
+        if (!query) {
+          setMessage("カテゴリ名を入力してください。");
+          return;
+        }
+        setMessage("検索中...");
+        try {
+          const response = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}`);
+          if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+          }
+          const data = await response.json();
+          renderCategories(data.categories || []);
+        } catch (error) {
+          setMessage("カテゴリ検索でエラーが発生しました。");
+        }
+      };
+
+      searchButton.addEventListener("click", search);
+      queryInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          search();
+        }
+      });
+    });
+  </script>
 {% endblock %}
