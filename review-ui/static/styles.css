@@ -290,7 +290,8 @@ dd {
   gap: 14px;
 }
 
-label {
+label,
+.field {
   display: grid;
   gap: 6px;
   color: var(--muted);
@@ -361,9 +362,15 @@ textarea {
 }
 
 .category-option__path,
+.category-selected,
 .category-empty {
   color: var(--muted);
   font-size: 12px;
+}
+
+.category-selected {
+  margin: 0;
+  color: var(--accent-strong);
 }
 
 .category-option code {
