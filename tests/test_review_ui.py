@@ -91,6 +91,13 @@ def test_category_search_api_returns_ranked_candidates(monkeypatch, tmp_path):
     module.load_category_master_rows.cache_clear()
 
 
+def test_category_field_targets_category_id_not_price():
+    module = load_review_ui_module()
+
+    assert module.CATEGORY_ID_FIELD == "カテゴリID"
+    assert module.CATEGORY_ID_FIELD != "販売価格"
+
+
 def test_item_page_renders_main_fields(monkeypatch):
     module = load_review_ui_module()
     monkeypatch.setattr(
@@ -117,6 +124,11 @@ def test_item_page_renders_main_fields(monkeypatch):
     assert b"brand review" in response.data
     assert b"Main Fields" in response.data
     assert b"data-category-helper" in response.data
+    assert 'name="カテゴリID"'.encode() in response.data
+    assert 'name="販売価格" value="" data-category-id-input'.encode() not in response.data
+    assert b"data-image-url-row" in response.data
+    assert b"data-image-move-up" in response.data
+    assert b"data-image-move-down" in response.data
 
 
 def test_item_page_renders_image_previews_through_proxy(monkeypatch):

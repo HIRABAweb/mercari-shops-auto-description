@@ -70,12 +70,25 @@
 
     <section class="form-section">
       <h2>Image URLs</h2>
-      <div class="form-grid">
+      <div class="image-url-list" data-image-url-list>
         {% for header in image_fields %}
-          <label>
-            <span>{{ header }}</span>
-            <input name="{{ header }}" value="{{ draft_row.get(header, "") }}">
-          </label>
+          <div class="image-url-row" data-image-url-row>
+            <div class="image-url-thumb">
+              {% if draft_row.get(header, "") %}
+                <img data-image-url-thumb src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=loop.index) }}" alt="">
+              {% else %}
+                <img data-image-url-thumb src="" alt="" hidden>
+              {% endif %}
+            </div>
+            <label>
+              <span>{{ header }}</span>
+              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}" data-image-url-input>
+            </label>
+            <div class="image-url-actions">
+              <button class="button" type="button" data-image-move-up>Up</button>
+              <button class="button" type="button" data-image-move-down>Down</button>
+            </div>
+          </div>
         {% endfor %}
       </div>
     </section>
@@ -185,6 +198,59 @@
           search();
         }
       });
+    });
+
+    document.querySelectorAll("[data-image-url-list]").forEach((list) => {
+      const rows = Array.from(list.querySelectorAll("[data-image-url-row]"));
+
+      const syncButtons = () => {
+        rows.forEach((row, index) => {
+          row.querySelector("[data-image-move-up]").disabled = index === 0;
+          row.querySelector("[data-image-move-down]").disabled = index === rows.length - 1;
+        });
+      };
+
+      const setThumb = (row, src, hidden) => {
+        const thumb = row.querySelector("[data-image-url-thumb]");
+        thumb.src = src;
+        thumb.hidden = hidden;
+      };
+
+      const swapImageValues = (row, otherRow) => {
+        const input = row.querySelector("[data-image-url-input]");
+        const otherInput = otherRow.querySelector("[data-image-url-input]");
+        const thumb = row.querySelector("[data-image-url-thumb]");
+        const otherThumb = otherRow.querySelector("[data-image-url-thumb]");
+        const thumbState = {
+          src: thumb.getAttribute("src") || "",
+          hidden: thumb.hidden,
+        };
+        const otherThumbState = {
+          src: otherThumb.getAttribute("src") || "",
+          hidden: otherThumb.hidden,
+        };
+
+        [input.value, otherInput.value] = [otherInput.value, input.value];
+        setThumb(row, otherThumbState.src, otherThumbState.hidden);
+        setThumb(otherRow, thumbState.src, thumbState.hidden);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        otherInput.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      rows.forEach((row, index) => {
+        row.querySelector("[data-image-move-up]").addEventListener("click", () => {
+          if (index > 0) {
+            swapImageValues(row, rows[index - 1]);
+          }
+        });
+        row.querySelector("[data-image-move-down]").addEventListener("click", () => {
+          if (index < rows.length - 1) {
+            swapImageValues(row, rows[index + 1]);
+          }
+        });
+      });
+
+      syncButtons();
     });
   </script>
 {% endblock %}
