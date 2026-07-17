@@ -432,10 +432,11 @@ def find_review_row_number(review_sheet, review_key: str) -> tuple[int, list[str
 
 
 def find_draft_row_number(draft_sheet, review_key: str) -> tuple[int, list[str]] | None:
+    latest_match = None
     for index, row in enumerate(worksheet_values(draft_sheet)[1:], start=2):
         if draft_row_matches_review_key(row, review_key):
-            return index, row
-    return None
+            latest_match = (index, row)
+    return latest_match
 
 
 def get_review_item(batch_id_or_prefix: str, product_code: str) -> tuple[dict[str, str], dict[str, str]]:
@@ -678,11 +679,11 @@ def build_approved_mercari_sheet_rows(batch_prefix: str, spreadsheet=None) -> li
     approved_keys = approved_review_item_keys(review_sheet, batch_prefix)
     if not approved_keys:
         return []
+    draft_by_key = draft_rows_by_key(draft_sheet, approved_keys)
     approved_rows = [
-        row
-        for row in worksheet_values(draft_sheet)
-        if row != MERCARI_HEADERS
-        and any(draft_row_matches_review_key(row, key) for key in approved_keys)
+        draft_by_key[key]
+        for key in sorted(approved_keys)
+        if key in draft_by_key
     ]
     return [MERCARI_HEADERS, *approved_rows]
 

@@ -27,7 +27,7 @@
       <div class="image-grid">
         {% for image in image_previews %}
           <figure class="image-preview">
-            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=image.index) }}" alt="">
+            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=image.index, v=image.cache_key) }}" alt="">
             <figcaption>{{ image.header }}</figcaption>
           </figure>
         {% endfor %}
@@ -78,7 +78,7 @@
             <button class="image-drag-handle" type="button" data-image-drag-handle aria-label="Drag image">Drag</button>
             <div class="image-url-thumb">
               {% if draft_row.get(header, "") %}
-                <img data-image-url-thumb src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=loop.index) }}" alt="">
+                <img data-image-url-thumb src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=loop.index, v=image_cache_key(draft_row.get(header, ''))) }}" alt="">
               {% else %}
                 <img data-image-url-thumb src="" alt="" hidden>
               {% endif %}

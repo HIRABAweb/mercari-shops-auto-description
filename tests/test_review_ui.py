@@ -580,6 +580,11 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
     calls = []
     monkeypatch.setattr(module, "update_draft_item", lambda *args: calls.append(("update", args)))
     monkeypatch.setattr(module, "approve_review_item", lambda *args: calls.append(("approve", args)))
+    monkeypatch.setattr(
+        module,
+        "delete_approved_csv_if_exists",
+        lambda *args: calls.append(("delete_csv", args)),
+    )
 
     response = client.post(
         "/batches/2026-07-07/items/A0001",
@@ -592,9 +597,10 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
     )
 
     assert response.status_code == 302
-    assert [call[0] for call in calls] == ["update", "approve"]
+    assert [call[0] for call in calls] == ["update", "delete_csv", "approve"]
     assert calls[0][1][2][module.TITLE_FIELD] == "Updated title"
     assert calls[0][1][2][module.PRICE_FIELD] == "12345"
+    assert calls[1][1] == ("2026-07-07",)
 
 
 def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
@@ -602,6 +608,11 @@ def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
     client = module.app.test_client()
     calls = []
     monkeypatch.setattr(module, "update_draft_item", lambda *args: calls.append(("update", args)))
+    monkeypatch.setattr(
+        module,
+        "delete_approved_csv_if_exists",
+        lambda *args: calls.append(("delete_csv", args)),
+    )
     monkeypatch.setattr(
         module,
         "mark_review_item_needs_review",
@@ -618,8 +629,8 @@ def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
     )
 
     assert response.status_code == 302
-    assert [call[0] for call in calls] == ["update", "needs_review"]
-    assert calls[1][1] == ("2026-07-07", "A0001")
+    assert [call[0] for call in calls] == ["update", "delete_csv", "needs_review"]
+    assert calls[2][1] == ("2026-07-07", "A0001")
 
 
 def test_standalone_approve_route_is_not_available():

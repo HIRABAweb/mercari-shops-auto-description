@@ -35,7 +35,7 @@
       <article class="item-row">
         <div class="thumb">
           {% if item.first_image_url %}
-            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=item.product_code, image_index=1) }}" alt="">
+            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=item.product_code, image_index=1, v=image_cache_key(item.first_image_url)) }}" alt="">
           {% endif %}
         </div>
         <div class="item-main">

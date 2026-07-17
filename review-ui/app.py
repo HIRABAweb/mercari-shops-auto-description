@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -86,6 +87,7 @@ def create_app() -> Flask:
     )
     app.secret_key = flask_secret_key()
     app.jinja_env.globals["csrf_token"] = csrf_token
+    app.jinja_env.globals["image_cache_key"] = image_cache_key
 
     @app.get("/")
     def batches():
@@ -195,6 +197,7 @@ def create_app() -> Flask:
         except KeyError:
             flash("Draft row is missing. Run Repair from GCS, then save again.")
             return redirect(url_for("batch_detail", batch_id=batch_id))
+        delete_approved_csv_if_exists(batch_id)
         if request.form.get("action") == "save_approve":
             approve_review_item(batch_id, product_code, current_utc_timestamp())
             flash("Draft saved and item approved.")
@@ -529,9 +532,21 @@ def object_name_matches_item(batch_id: str, product_code: str, object_name: str)
 def image_previews_from_draft_row(draft_row: dict[str, str]) -> list[dict[str, str | int]]:
     previews = []
     for index, header in enumerate(IMAGE_FIELDS, start=1):
-        if draft_row.get(header, "").strip():
-            previews.append({"index": index, "header": header})
+        image_url = draft_row.get(header, "").strip()
+        if image_url:
+            previews.append({
+                "index": index,
+                "header": header,
+                "cache_key": image_cache_key(image_url),
+            })
     return previews
+
+
+def image_cache_key(image_url: str) -> str:
+    value = (image_url or "").strip()
+    if not value:
+        return ""
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
 
 
 def approved_item_count(items) -> int:
@@ -550,6 +565,18 @@ def upload_approved_csv(batch_id: str, csv_text: str) -> str:
         content_type="text/csv; charset=utf-8",
     )
     return object_name
+
+
+def delete_approved_csv_if_exists(batch_id: str) -> None:
+    try:
+        object_name = approved_csv_object_name(batch_id)
+        bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
+        blob = bucket.blob(object_name)
+        if blob.exists():
+            blob.delete()
+            LOGGER.info("Deleted stale approved CSV after draft edit: %s", object_name)
+    except Exception:
+        LOGGER.exception("Failed to delete stale approved CSV. batch_id=%s", batch_id)
 
 
 def safe_filename(value: str) -> str:

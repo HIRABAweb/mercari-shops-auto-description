@@ -364,6 +364,43 @@ def test_update_draft_item_updates_only_matching_batch_row(monkeypatch):
     assert draft.values[2][MERCARI_HEADERS.index("商品名")] == "other batch"
 
 
+def test_update_draft_item_updates_latest_matching_duplicate_row(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    title_header = sheets_workflow.MERCARI_TITLE_HEADER
+    title_index = MERCARI_HEADERS.index(title_header)
+    old_row = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001-old.jpg",
+            "A0001",
+        )
+        | {title_header: "old duplicate"},
+    )
+    latest_row = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001-latest.jpg",
+            "A0001",
+        )
+        | {title_header: "latest duplicate"},
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS, old_row, latest_row],
+    )
+
+    sheets_workflow.update_draft_item(
+        "2026-07-06",
+        "A0001",
+        {title_header: "new latest title"},
+    )
+
+    draft = spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI]
+    assert draft.values[1][title_index] == "old duplicate"
+    assert draft.values[2][title_index] == "new latest title"
+
+
 def test_approve_review_item_marks_status_and_timestamp(monkeypatch):
     spreadsheet = FakeSpreadsheet()
     monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
@@ -452,6 +489,51 @@ def test_export_approved_mercari_rows_and_csv_returns_csv_text(monkeypatch):
     assert exported_count == 1
     assert "approved title" in csv_text
     assert csv_text.splitlines()[0].split(",")[0] == "商品画像名_1"
+
+
+def test_export_approved_mercari_rows_uses_latest_matching_duplicate_row(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+    title_header = sheets_workflow.MERCARI_TITLE_HEADER
+    title_index = MERCARI_HEADERS.index(title_header)
+    old_row = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001-old.jpg",
+            "A0001",
+        )
+        | {title_header: "old duplicate"},
+    )
+    latest_row = sheets_workflow.dict_row_to_list(
+        MERCARI_HEADERS,
+        mercari_row(
+            "https://storage.googleapis.com/product-images/exports/2026-07-06/A0001/001-latest.jpg",
+            "A0001",
+        )
+        | {title_header: "latest duplicate"},
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_DRAFT_MERCARI,
+        [MERCARI_HEADERS, old_row, latest_row],
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_REVIEW,
+        [
+            sheets_workflow.REVIEW_SHEET_HEADERS,
+            ["exports/2026-07-06/A0001", "exports/2026-07-06", "A0001", "approved"],
+        ],
+    )
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_APPROVED_MERCARI,
+        [["existing approved csv row"]],
+    )
+
+    exported_count = sheets_workflow.export_approved_mercari_rows("exports/2026-07-06")
+
+    approved = spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI]
+    assert exported_count == 1
+    assert len(approved.values) == 2
+    assert approved.values[1][title_index] == "latest duplicate"
 
 
 def test_export_approved_mercari_rows_excludes_needs_review_rows(monkeypatch):
