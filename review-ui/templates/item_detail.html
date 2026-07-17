@@ -59,6 +59,8 @@
               <span>{{ header }}</span>
               {% if header == description_field %}
               <textarea name="{{ header }}" rows="10">{{ draft_row.get(header, "") }}</textarea>
+              {% elif header == price_field %}
+              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}" inputmode="numeric" pattern="[0-9]*" data-price-input>
               {% else %}
               <input name="{{ header }}" value="{{ draft_row.get(header, "") }}">
               {% endif %}
@@ -72,7 +74,8 @@
       <h2>Image URLs</h2>
       <div class="image-url-list" data-image-url-list>
         {% for header in image_fields %}
-          <div class="image-url-row" data-image-url-row>
+          <div class="image-url-row" data-image-url-row draggable="true">
+            <button class="image-drag-handle" type="button" data-image-drag-handle aria-label="Drag image">Drag</button>
             <div class="image-url-thumb">
               {% if draft_row.get(header, "") %}
                 <img data-image-url-thumb src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=loop.index) }}" alt="">
@@ -111,6 +114,17 @@
     </div>
   </form>
   <script>
+    document.querySelectorAll("[data-price-input]").forEach((input) => {
+      const sanitize = () => {
+        input.value = input.value.replace(/[０-９]/g, (char) =>
+          String.fromCharCode(char.charCodeAt(0) - 0xFEE0)
+        ).replace(/[^0-9]/g, "");
+      };
+      input.addEventListener("input", sanitize);
+      input.addEventListener("change", sanitize);
+      sanitize();
+    });
+
     document.querySelectorAll("[data-category-helper]").forEach((helper) => {
       const field = helper.closest(".field");
       const idInput = field.querySelector("[data-category-id-input]");
@@ -202,6 +216,7 @@
 
     document.querySelectorAll("[data-image-url-list]").forEach((list) => {
       const rows = Array.from(list.querySelectorAll("[data-image-url-row]"));
+      let draggedIndex = null;
 
       const syncButtons = () => {
         rows.forEach((row, index) => {
@@ -210,43 +225,71 @@
         });
       };
 
-      const setThumb = (row, src, hidden) => {
+      const rowState = (row) => {
         const thumb = row.querySelector("[data-image-url-thumb]");
-        thumb.src = src;
-        thumb.hidden = hidden;
+        return {
+          value: row.querySelector("[data-image-url-input]").value,
+          thumbSrc: thumb.getAttribute("src") || "",
+          thumbHidden: thumb.hidden,
+        };
       };
 
-      const swapImageValues = (row, otherRow) => {
+      const applyRowState = (row, state) => {
         const input = row.querySelector("[data-image-url-input]");
-        const otherInput = otherRow.querySelector("[data-image-url-input]");
         const thumb = row.querySelector("[data-image-url-thumb]");
-        const otherThumb = otherRow.querySelector("[data-image-url-thumb]");
-        const thumbState = {
-          src: thumb.getAttribute("src") || "",
-          hidden: thumb.hidden,
-        };
-        const otherThumbState = {
-          src: otherThumb.getAttribute("src") || "",
-          hidden: otherThumb.hidden,
-        };
-
-        [input.value, otherInput.value] = [otherInput.value, input.value];
-        setThumb(row, otherThumbState.src, otherThumbState.hidden);
-        setThumb(otherRow, thumbState.src, thumbState.hidden);
+        input.value = state.value;
+        thumb.src = state.thumbSrc;
+        thumb.hidden = state.thumbHidden;
         input.dispatchEvent(new Event("input", { bubbles: true }));
-        otherInput.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      const moveImageValue = (fromIndex, toIndex) => {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) {
+          return;
+        }
+        const states = rows.map(rowState);
+        const [moved] = states.splice(fromIndex, 1);
+        states.splice(toIndex, 0, moved);
+        rows.forEach((row, index) => applyRowState(row, states[index]));
       };
 
       rows.forEach((row, index) => {
         row.querySelector("[data-image-move-up]").addEventListener("click", () => {
           if (index > 0) {
-            swapImageValues(row, rows[index - 1]);
+            moveImageValue(index, index - 1);
           }
         });
         row.querySelector("[data-image-move-down]").addEventListener("click", () => {
           if (index < rows.length - 1) {
-            swapImageValues(row, rows[index + 1]);
+            moveImageValue(index, index + 1);
           }
+        });
+        row.addEventListener("dragstart", (event) => {
+          draggedIndex = index;
+          row.classList.add("image-url-row--dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", String(index));
+        });
+        row.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          row.classList.add("image-url-row--drop-target");
+        });
+        row.addEventListener("dragleave", () => {
+          row.classList.remove("image-url-row--drop-target");
+        });
+        row.addEventListener("drop", (event) => {
+          event.preventDefault();
+          const fromIndex = draggedIndex ?? Number(event.dataTransfer.getData("text/plain"));
+          moveImageValue(fromIndex, index);
+          rows.forEach((candidate) => candidate.classList.remove("image-url-row--drop-target"));
+        });
+        row.addEventListener("dragend", () => {
+          draggedIndex = null;
+          rows.forEach((candidate) => {
+            candidate.classList.remove("image-url-row--dragging");
+            candidate.classList.remove("image-url-row--drop-target");
+          });
         });
       });
 

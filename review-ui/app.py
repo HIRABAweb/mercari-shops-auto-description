@@ -53,6 +53,7 @@ PRIMARY_FIELDS = [MERCARI_HEADERS[index] for index in PRIMARY_FIELD_INDICES]
 TITLE_FIELD = MERCARI_HEADERS[20]
 DESCRIPTION_FIELD = MERCARI_HEADERS[21]
 CATEGORY_ID_FIELD = MERCARI_HEADERS[74]
+PRICE_FIELD = MERCARI_HEADERS[73]
 IMAGE_FIELDS = MERCARI_HEADERS[:20]
 CATEGORY_MASTER_PATH = YAHUOKU_DIR / "resources" / "mercari" / "category_master_updated.csv"
 CATEGORY_MASTER_ID_HEADER = "\u30ab\u30c6\u30b4\u30eaID"
@@ -176,6 +177,7 @@ def create_app() -> Flask:
             title_field=TITLE_FIELD,
             description_field=DESCRIPTION_FIELD,
             category_field=CATEGORY_ID_FIELD,
+            price_field=PRICE_FIELD,
         )
 
     @app.post("/batches/<path:batch_id>/items/<product_code>")
@@ -186,6 +188,8 @@ def create_app() -> Flask:
             for header in MERCARI_HEADERS
             if header in request.form
         }
+        if PRICE_FIELD in updates:
+            updates[PRICE_FIELD] = sanitize_price(updates[PRICE_FIELD])
         try:
             update_draft_item(batch_id, product_code, updates)
         except KeyError:
@@ -376,6 +380,11 @@ def repair_result_message(result: RepairResult) -> str:
     if result.errors:
         return f"{message} First errors: {'; '.join(result.errors[:3])}"
     return message
+
+
+def sanitize_price(value: str) -> str:
+    translated = value.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    return re.sub(r"[^0-9]", "", translated)
 
 
 @lru_cache(maxsize=1)

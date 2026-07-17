@@ -127,8 +127,11 @@ def test_item_page_renders_main_fields(monkeypatch):
     assert 'name="カテゴリID"'.encode() in response.data
     assert 'name="販売価格" value="" data-category-id-input'.encode() not in response.data
     assert b"data-image-url-row" in response.data
+    assert b'draggable="true"' in response.data
+    assert b"data-image-drag-handle" in response.data
     assert b"data-image-move-up" in response.data
     assert b"data-image-move-down" in response.data
+    assert b"data-price-input" in response.data
 
 
 def test_item_page_renders_image_previews_through_proxy(monkeypatch):
@@ -584,12 +587,14 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
             "csrf_token": csrf_from_session(client),
             "action": "save_approve",
             module.TITLE_FIELD: "Updated title",
+            module.PRICE_FIELD: "１２,abc345円",
         },
     )
 
     assert response.status_code == 302
     assert [call[0] for call in calls] == ["update", "approve"]
     assert calls[0][1][2][module.TITLE_FIELD] == "Updated title"
+    assert calls[0][1][2][module.PRICE_FIELD] == "12345"
 
 
 def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
