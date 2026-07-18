@@ -137,15 +137,19 @@ Review UIでは、Google Sheets上の下書き行を確認・編集し、承認�
 
 ## メルカリShopsの商品画像
 
-メルカリShops用CSVでは、`商品画像名_1` 〜 `商品画像名_20` にGCS公開画像URLを出力します。
+`Draft_Mercari_List` と商品単位の中間 `mercari.csv` では、`商品画像名_1` 〜 `商品画像名_20` に非公開GCS画像の参照URLを保持します。これらはReview UI内部で使う下書きデータであり、メルカリShopsへ直接アップロードする最終CSVではありません。
 
-この方式により、商品画像をメルカリShopsへ別途アップロードする二重作業を避けられます。ただし、CSV投入時にメルカリShops側から画像URLへアクセスできる必要があります。
+Review UIの `Generate CSV` で作る `exports/{batch_id}/approved/mercari_shops.csv` だけがアップロード用です。最終CSVでは、承認済み商品の画像をメルカリShopsが取得できる7日間有効の署名付きURLへ変換します。バケット自体は公開しません。
+
+最終CSVは公式テンプレートと同じ88列、UTF-8 BOM付きで出力します。商品画像、商品名、価格、カテゴリID、在庫、状態、配送項目などに公式仕様違反がある場合はCSVを生成せず、Review UIへ商品管理コードと修正項目を表示します。
 
 運用上の注意点:
 
-- 画像URLは、少なくともCSV投入と商品登録確認が終わるまでは削除しない
+- `Generate CSV` 後、7日以内にメルカリShopsへアップロードする
+- 7日を過ぎた場合は `Generate CSV` をもう一度実行してURLを更新する
+- 画像はCSV投入と商品登録確認が終わるまでGCSから削除しない
 - 画像ファイル名には日本語・空白・特殊記号を避ける
-- 画像順序はファイル名内の数字順で決まるため、`001.jpg`, `002.jpg` のような連番を推奨する
+- 最終的な画像順序はReview UIの商品編集画面で確認する
 - メルカリShops画像は最大20枚まで扱う
 
 ---
@@ -211,6 +215,8 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | yahuoku-to-mercarishops | `SPREADSHEET_ID` | PR #6のSheets承認フローを使う場合のみ設定 |
 | review-ui | `SPREADSHEET_ID` | Review UIが参照するSpreadsheet |
 | review-ui | `PRODUCT_BUCKET_NAME` | 商品画像・成果物を参照するGCS bucket |
+| review-ui | `MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL` | 最終CSVの画像URLへ署名するruntime service account |
+| review-ui | `MERCARI_IMAGE_SIGNED_URL_TTL_HOURS` | 署名付き画像URLの有効時間。既定値・最大値は168時間 |
 | review-ui | `FLASK_SECRET_KEY` | Flask session / CSRF用secret |
 
 `.env`、APIキー、実際のGCPプロジェクトID、実バケット名、Spreadsheet ID、secret値はGit管理しません。

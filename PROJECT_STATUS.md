@@ -87,6 +87,8 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 - 承認済み商品を `Save` のみで編集した場合は `needs_review` に戻し、再承認なしに最終CSVへ入らないようにした
 - Review UIにSheets/GCSへ触らない `/healthz` を追加
 - `export_approved_mercari_csv` HTTP entrypointはPOSTのみ再生成を許可
+- 最終CSVは公式88列・UTF-8 BOM付きで生成し、非公開GCS画像を7日間有効の署名付きURLへ変換
+- 公式必須項目や価格・文字数・配送コード・画像取得を生成前に検証し、違反時はCSV生成を停止
 
 ---
 
@@ -97,10 +99,11 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 - Review UI runtime service accountのSpreadsheet編集権限
 - Review UI runtime service accountの商品画像GCS read権限
 - Review UI runtime service accountの承認済みCSV GCS write権限
+- Review UI runtime service account自身への `roles/iam.serviceAccountTokenCreator`
 - `yahuoku-to-mercarishops` runtime service accountのSpreadsheet編集権限
 - `/healthz` が `ok` を返すこと
 - private bucketの商品画像サムネイルがReview UIで表示できること
-- 実データでMercari Shops CSVのダウンロード、アップロード、最終確認まで通し検証すること
+- 実データで署名付き画像URLの未認証取得とMercari Shops CSVアップロードを最終確認すること
 - Cloud Run `min-instances=0`、`max-instances=1`、budget/alert、Artifact Registry画像削除運用を確認すること
 
 ---

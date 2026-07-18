@@ -15,6 +15,7 @@ operator, see `docs/user_action_checklist.md`.
 - Spreadsheet ID: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
 - `PRODUCT_BUCKET_NAME`: `test-review-ui`
 - Approved CSV object path: `exports/{batch_id}/approved/mercari_shops.csv`
+- Approved CSV image URLs: private GCS objects exposed with 7-day V4 signed URLs
 - `FLASK_SECRET_KEY`: required on Cloud Run
 - Cost guardrails:
   - `--min-instances=0`
@@ -54,6 +55,8 @@ This runtime service account needs:
 - Edit access to the target Google Spreadsheet.
 - Read access to product images in `test-review-ui`.
 - Write access to approved CSV objects in `test-review-ui`.
+- Permission to sign its own GCS image URLs (`roles/iam.serviceAccountTokenCreator`
+  on the runtime service account itself).
 
 ## Build and deploy commands
 
@@ -132,6 +135,19 @@ gcloud storage buckets add-iam-policy-binding "gs://$ProductBucketName" `
   --project=$ProjectId
 ```
 
+Enable the IAM Service Account Credentials API and allow the runtime service
+account to sign its own short-lived image URLs. This does not make the bucket
+public:
+
+```powershell
+gcloud services enable iamcredentials.googleapis.com --project=$ProjectId
+
+gcloud iam service-accounts add-iam-policy-binding $ServiceAccountEmail `
+  --member="serviceAccount:$ServiceAccountEmail" `
+  --role="roles/iam.serviceAccountTokenCreator" `
+  --project=$ProjectId
+```
+
 Share the Spreadsheet with `$ServiceAccountEmail` as an editor before using the
 Review UI. Sharing it with `hirabaaiwork@gmail.com` lets the human user open the
 sheet, but the Cloud Run app itself needs the runtime service account to be an
@@ -161,7 +177,7 @@ gcloud run deploy $ServiceName `
   --no-allow-unauthenticated `
   --iap `
   --service-account=$ServiceAccountEmail `
-  --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,FLASK_SECRET_KEY=$FlaskSecretKey"
+  --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL=$ServiceAccountEmail,MERCARI_IMAGE_SIGNED_URL_TTL_HOURS=168,FLASK_SECRET_KEY=$FlaskSecretKey"
 ```
 
 Grant Cloud Run invoker permission to the IAP service agent:
@@ -244,11 +260,14 @@ settings file, runs `gcloud iap settings set`, and deletes the temporary file.
 - Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
 - Confirm `$ServiceAccountEmail` is an editor on the Spreadsheet.
 - Confirm `$ServiceAccountEmail` has read/write access to `test-review-ui`.
+- Confirm `$ServiceAccountEmail` can sign its own URLs with
+  `roles/iam.serviceAccountTokenCreator`.
 - Confirm `/healthz` returns `ok` after deployment.
 - Confirm private product thumbnails render in the Review UI.
 - Generate one approved CSV and verify it is saved to
   `exports/{batch_id}/approved/mercari_shops.csv`.
-- Download the CSV from the UI and test upload to Mercari Shops.
+- Download the CSV from the UI, confirm its image URLs are reachable without a
+  Google login, and upload it to Mercari Shops within 7 days.
 
 ## Optional approved CSV function
 

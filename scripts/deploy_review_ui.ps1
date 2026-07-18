@@ -6,6 +6,7 @@ param(
     [string]$SpreadsheetId = "16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc",
     [string]$AllowedUser = "hirabaaiwork@gmail.com",
     [string]$ServiceAccountName = "mercari-review-ui-sa",
+    [int]$MercariImageSignedUrlTtlHours = 168,
     [string]$FlaskSecretKey = ""
 )
 
@@ -53,6 +54,7 @@ gcloud services enable `
     artifactregistry.googleapis.com `
     cloudbuild.googleapis.com `
     iap.googleapis.com `
+    iamcredentials.googleapis.com `
     cloudresourcemanager.googleapis.com `
     --project=$ProjectId
 
@@ -80,6 +82,11 @@ gcloud storage buckets add-iam-policy-binding "gs://$ProductBucketName" `
     --role="roles/storage.objectAdmin" `
     --project=$ProjectId
 
+gcloud iam service-accounts add-iam-policy-binding $ServiceAccountEmail `
+    --member="serviceAccount:$ServiceAccountEmail" `
+    --role="roles/iam.serviceAccountTokenCreator" `
+    --project=$ProjectId
+
 Write-Host ""
 Write-Host "IMPORTANT:"
 Write-Host "Share this Spreadsheet as Editor with the runtime service account:"
@@ -103,7 +110,7 @@ gcloud run deploy $ServiceName `
     --no-allow-unauthenticated `
     --iap `
     --service-account=$ServiceAccountEmail `
-    --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,FLASK_SECRET_KEY=$FlaskSecretKey"
+    --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL=$ServiceAccountEmail,MERCARI_IMAGE_SIGNED_URL_TTL_HOURS=$MercariImageSignedUrlTtlHours,FLASK_SECRET_KEY=$FlaskSecretKey"
 
 gcloud run services add-iam-policy-binding $ServiceName `
     --region=$Region `

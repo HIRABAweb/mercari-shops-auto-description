@@ -690,15 +690,24 @@ def build_approved_mercari_sheet_rows(batch_prefix: str, spreadsheet=None) -> li
 
 def export_approved_mercari_rows_and_csv(batch_prefix: str) -> tuple[int, str]:
     spreadsheet = get_spreadsheet()
-    approved_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_APPROVED_MERCARI)
     rows = build_approved_mercari_sheet_rows(batch_prefix, spreadsheet)
     if rows is None:
         return -1, ""
     if not rows:
         return 0, ""
 
-    replace_sheet_rows(approved_sheet, rows, len(MERCARI_HEADERS))
+    replace_approved_mercari_sheet_rows(rows, spreadsheet)
     return len(rows) - 1, list_rows_to_csv_text(rows)
+
+
+def replace_approved_mercari_sheet_rows(
+    rows: list[list[str]],
+    spreadsheet=None,
+) -> None:
+    if spreadsheet is None:
+        spreadsheet = get_spreadsheet()
+    approved_sheet = get_or_create_worksheet(spreadsheet, SHEET_NAME_APPROVED_MERCARI)
+    replace_sheet_rows(approved_sheet, rows, len(MERCARI_HEADERS))
 
 
 def export_approved_mercari_rows(batch_prefix: str) -> int:

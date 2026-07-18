@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from mimetypes import guess_type
 from pathlib import Path
@@ -27,19 +27,28 @@ YAHUOKU_DIR = ROOT_DIR / "yahuoku-to-mercarishops"
 if str(YAHUOKU_DIR) not in sys.path:
     sys.path.insert(0, str(YAHUOKU_DIR))
 
-from csv_export import MERCARI_HEADERS, REVIEW_REQUIRED_HEADERS  # noqa: E402
+from csv_export import (  # noqa: E402
+    MERCARI_HEADERS,
+    REVIEW_REQUIRED_HEADERS,
+    MercariValidationIssue,
+    build_mercari_csv_bytes,
+    validate_mercari_upload_rows,
+)
 from listing_data import IMAGE_EXTENSIONS  # noqa: E402
 from sheets_workflow import (  # noqa: E402
     approve_review_item,
     batch_id_from_prefix,
+    build_approved_mercari_sheet_rows,
+    dict_row_to_list,
     ensure_draft_item,
     ensure_review_item,
-    export_approved_mercari_rows_and_csv,
     get_review_item,
+    list_row_to_dict,
     list_batch_summaries,
     list_review_items,
     mark_review_item_needs_review,
     normalize_batch_prefix,
+    replace_approved_mercari_sheet_rows,
     update_draft_item,
 )
 
@@ -60,6 +69,9 @@ CATEGORY_MASTER_PATH = YAHUOKU_DIR / "resources" / "mercari" / "category_master_
 CATEGORY_MASTER_ID_HEADER = "\u30ab\u30c6\u30b4\u30eaID"
 CATEGORY_MASTER_NAME_HEADER = "\u30ab\u30c6\u30b4\u30ea\u540d"
 CATEGORY_MASTER_FULL_NAME_HEADER = "\u30ab\u30c6\u30b4\u30ea\u540d\uff08\u30d5\u30eb\uff09"
+APPROVED_CSV_EXPIRES_METADATA = "mercari-image-urls-expire-at"
+APPROVED_CSV_COLUMNS_METADATA = "mercari-template-columns"
+MAX_SIGNED_URL_TTL_HOURS = 168
 
 
 class RepairResult:
@@ -77,6 +89,12 @@ class RepairResult:
         self.draft_added = draft_added
         self.skipped = skipped
         self.errors = errors or []
+
+
+class MercariExportValidationError(ValueError):
+    def __init__(self, issues: list[MercariValidationIssue]) -> None:
+        self.issues = issues
+        super().__init__("; ".join(issue.display_message() for issue in issues))
 
 
 def create_app() -> Flask:
@@ -209,30 +227,54 @@ def create_app() -> Flask:
     @app.post("/batches/<path:batch_id>/export")
     def export_batch(batch_id: str):
         validate_csrf_token()
-        exported_count, csv_text = export_approved_mercari_rows_and_csv(
-            normalize_batch_prefix(batch_id)
-        )
-        if exported_count < 0:
+        rows = build_approved_mercari_sheet_rows(normalize_batch_prefix(batch_id))
+        if rows is None:
             abort(404)
-        if exported_count == 0:
+        if not rows:
             flash("No approved items. Save and approve at least one item before generating CSV.")
             return redirect(url_for("batch_detail", batch_id=batch_id))
-        object_name = upload_approved_csv(batch_id, csv_text)
-        flash(f"Generated approved CSV with {exported_count} rows: {object_name}")
+
+        try:
+            upload_rows, expires_at = prepare_mercari_upload_rows(batch_id, rows[1:])
+        except MercariExportValidationError as error:
+            delete_approved_csv_if_exists(batch_id)
+            flash("CSV generation stopped. Fix the following items, then approve and generate again.")
+            for issue in error.issues[:10]:
+                flash(issue.display_message())
+            if len(error.issues) > 10:
+                flash(f"There are {len(error.issues) - 10} more errors.")
+            return redirect(url_for("batch_detail", batch_id=batch_id))
+        except Exception:
+            LOGGER.exception("Failed to prepare Mercari Shops upload CSV. batch_id=%s", batch_id)
+            delete_approved_csv_if_exists(batch_id)
+            flash("CSV generation failed while preparing secure image URLs. Try again.")
+            return redirect(url_for("batch_detail", batch_id=batch_id))
+
+        approved_rows = [
+            MERCARI_HEADERS,
+            *[dict_row_to_list(MERCARI_HEADERS, row) for row in upload_rows],
+        ]
+        csv_bytes = build_mercari_csv_bytes(upload_rows)
+        replace_approved_mercari_sheet_rows(approved_rows)
+        object_name = upload_approved_csv(batch_id, csv_bytes, expires_at)
+        flash(
+            f"Generated official Mercari Shops CSV with {len(upload_rows)} rows: {object_name}. "
+            "Upload it within 7 days."
+        )
         return redirect(url_for("batch_detail", batch_id=batch_id))
 
     @app.get("/batches/<path:batch_id>/download")
     def download_batch(batch_id: str):
-        object_name = approved_csv_object_name(batch_id)
-        bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
-        blob = bucket.blob(object_name)
-        if not blob.exists():
-            flash("Approved CSV has not been generated yet. Approve at least one item and generate it first.")
+        blob = current_approved_csv_blob(batch_id)
+        if blob is None:
+            flash(
+                "Approved CSV is missing or its image URLs have expired. "
+                "Generate CSV again before downloading."
+            )
             return redirect(url_for("batch_detail", batch_id=batch_id))
-        csv_text = blob.download_as_text(encoding="utf-8-sig")
         return Response(
-            csv_text,
-            mimetype="text/csv; charset=utf-8",
+            blob.download_as_bytes(),
+            content_type="text/csv; charset=utf-8",
             headers={
                 "Content-Disposition": (
                     f'attachment; filename="{safe_filename(batch_id)}_mercari_shops.csv"'
@@ -285,13 +327,35 @@ def approved_csv_object_name(batch_id: str) -> str:
 
 def approved_csv_exists(batch_id: str) -> bool:
     try:
-        object_name = approved_csv_object_name(batch_id)
-        bucket_name = required_env("PRODUCT_BUCKET_NAME")
-        bucket = storage_client().bucket(bucket_name)
-        return bucket.blob(object_name).exists()
+        return current_approved_csv_blob(batch_id) is not None
     except Exception:
         LOGGER.exception("Failed to check approved CSV existence. batch_id=%s", batch_id)
         return False
+
+
+def current_approved_csv_blob(batch_id: str):
+    object_name = approved_csv_object_name(batch_id)
+    bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
+    blob = bucket.blob(object_name)
+    if not blob.exists():
+        return None
+    blob.reload()
+    expires_at = parse_approved_csv_expiration((blob.metadata or {}).get(APPROVED_CSV_EXPIRES_METADATA))
+    if expires_at is None or expires_at <= datetime.now(timezone.utc):
+        return None
+    return blob
+
+
+def parse_approved_csv_expiration(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def restore_batch_items_from_gcs(batch_id: str) -> RepairResult:
@@ -549,6 +613,123 @@ def image_cache_key(image_url: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
 
 
+def prepare_mercari_upload_rows(
+    batch_id: str,
+    draft_rows: list[list[str]],
+) -> tuple[list[dict[str, str]], datetime]:
+    upload_rows = [list_row_to_dict(MERCARI_HEADERS, row) for row in draft_rows]
+    for row in upload_rows:
+        if row.get("SKU1_種類", "").strip().casefold() == "one size":
+            row["SKU1_種類"] = "フリーサイズ"
+
+    issues = validate_mercari_upload_rows(upload_rows)
+    if issues:
+        raise MercariExportValidationError(issues)
+
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=signed_url_ttl_hours())
+    bucket_name = required_env("PRODUCT_BUCKET_NAME")
+    bucket = storage_client().bucket(bucket_name)
+    image_issues: list[MercariValidationIssue] = []
+
+    for row in upload_rows:
+        product_code = row.get("SKU1_商品管理コード", "").strip()
+        item_label = product_code or "商品管理コードなし"
+        for header in IMAGE_FIELDS:
+            image_url = row.get(header, "").strip()
+            if not image_url:
+                continue
+            blob_ref = storage_url_to_blob_ref(image_url)
+            if not blob_ref:
+                image_issues.append(
+                    MercariValidationIssue(
+                        item_label,
+                        header,
+                        "Review UIで表示できるGCSの商品画像を指定してください",
+                    )
+                )
+                continue
+            image_bucket_name, object_name = blob_ref
+            if image_bucket_name != bucket_name or not object_name_matches_item(
+                batch_id,
+                product_code,
+                object_name,
+            ):
+                image_issues.append(
+                    MercariValidationIssue(
+                        item_label,
+                        header,
+                        "この商品フォルダ内の画像を指定してください",
+                    )
+                )
+                continue
+            if not object_name.lower().endswith(IMAGE_EXTENSIONS):
+                image_issues.append(
+                    MercariValidationIssue(item_label, header, "対応する画像形式ではありません")
+                )
+                continue
+            blob = bucket.blob(object_name)
+            if not blob.exists():
+                image_issues.append(
+                    MercariValidationIssue(item_label, header, "画像ファイルが見つかりません")
+                )
+                continue
+            row[header] = generate_image_signed_url(blob, expires_at)
+
+    if image_issues:
+        raise MercariExportValidationError(image_issues)
+    return upload_rows, expires_at
+
+
+def signed_url_ttl_hours() -> int:
+    raw_value = os.getenv("MERCARI_IMAGE_SIGNED_URL_TTL_HOURS", "168").strip()
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError("MERCARI_IMAGE_SIGNED_URL_TTL_HOURS must be an integer.") from error
+    if value < 1 or value > MAX_SIGNED_URL_TTL_HOURS:
+        raise RuntimeError(
+            f"MERCARI_IMAGE_SIGNED_URL_TTL_HOURS must be between 1 and {MAX_SIGNED_URL_TTL_HOURS}."
+        )
+    return value
+
+
+def generate_image_signed_url(blob, expires_at: datetime) -> str:
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=expires_at,
+        method="GET",
+        credentials=iam_signing_credentials(),
+    )
+
+
+@lru_cache(maxsize=1)
+def iam_signing_credentials():
+    import google.auth
+    from google.auth import iam
+    from google.auth.transport.requests import Request
+    from google.oauth2 import service_account
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    auth_request = Request()
+    if not credentials.valid:
+        credentials.refresh(auth_request)
+    service_account_email = (
+        os.getenv("MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL")
+        or getattr(credentials, "service_account_email", "")
+        or ""
+    ).strip()
+    if not service_account_email:
+        raise RuntimeError("MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL is required.")
+    signer = iam.Signer(auth_request, credentials, service_account_email)
+    return service_account.Credentials(
+        signer=signer,
+        service_account_email=service_account_email,
+        token_uri="https://oauth2.googleapis.com/token",
+    )
+
+
 def approved_item_count(items) -> int:
     return sum(
         1
@@ -557,11 +738,20 @@ def approved_item_count(items) -> int:
     )
 
 
-def upload_approved_csv(batch_id: str, csv_text: str) -> str:
+def upload_approved_csv(
+    batch_id: str,
+    csv_bytes: bytes,
+    expires_at: datetime,
+) -> str:
     object_name = approved_csv_object_name(batch_id)
     bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
-    bucket.blob(object_name).upload_from_string(
-        csv_text,
+    blob = bucket.blob(object_name)
+    blob.metadata = {
+        APPROVED_CSV_EXPIRES_METADATA: expires_at.astimezone(timezone.utc).isoformat(),
+        APPROVED_CSV_COLUMNS_METADATA: str(len(MERCARI_HEADERS)),
+    }
+    blob.upload_from_string(
+        csv_bytes,
         content_type="text/csv; charset=utf-8",
     )
     return object_name

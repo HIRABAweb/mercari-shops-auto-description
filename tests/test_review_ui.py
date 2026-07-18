@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +32,32 @@ def load_review_ui_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def valid_mercari_row(module, product_code="A0001"):
+    row = {header: "" for header in module.MERCARI_HEADERS}
+    row.update(
+        {
+            "商品画像名_1": (
+                "https://storage.googleapis.com/product-images/"
+                f"exports/2026-07-07/{product_code}/001.jpg"
+            ),
+            "商品名": "Approved title",
+            "商品説明": "Description",
+            "SKU1_種類": "M",
+            "SKU1_在庫数": "1",
+            "SKU1_商品管理コード": product_code,
+            "販売価格": "1000",
+            "カテゴリID": "category-id",
+            "商品の状態": "3",
+            "配送方法": "3",
+            "発送元の地域": "jp34",
+            "発送までの日数": "2",
+            "商品ステータス": "1",
+            "配送料の負担": "1",
+        }
+    )
+    return row
 
 
 def test_batches_page_renders_without_live_sheets(monkeypatch):
@@ -248,6 +275,61 @@ def test_storage_url_to_blob_ref_rejects_non_gcs_url():
     assert module.storage_url_to_blob_ref("https://storage.googleapis.com/product-images") is None
 
 
+def test_prepare_mercari_upload_rows_signs_private_gcs_images(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    monkeypatch.setenv("MERCARI_IMAGE_SIGNED_URL_TTL_HOURS", "168")
+    signing_credentials = object()
+    monkeypatch.setattr(module, "iam_signing_credentials", lambda: signing_credentials)
+
+    class FakeBlob:
+        def __init__(self, object_name):
+            self.object_name = object_name
+
+        def exists(self):
+            return True
+
+        def generate_signed_url(self, **kwargs):
+            assert kwargs["version"] == "v4"
+            assert kwargs["method"] == "GET"
+            assert kwargs["credentials"] is signing_credentials
+            return f"https://storage.googleapis.com/product-images/{self.object_name}?signed=yes"
+
+    class FakeBucket:
+        def blob(self, object_name):
+            return FakeBlob(object_name)
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return FakeBucket()
+
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+    row = valid_mercari_row(module)
+
+    upload_rows, expires_at = module.prepare_mercari_upload_rows(
+        "2026-07-07",
+        [module.dict_row_to_list(module.MERCARI_HEADERS, row)],
+    )
+
+    assert upload_rows[0]["商品画像名_1"].endswith("?signed=yes")
+    assert expires_at > datetime.now(timezone.utc) + timedelta(days=6)
+
+
+def test_prepare_mercari_upload_rows_rejects_missing_image(monkeypatch):
+    module = load_review_ui_module()
+    row = valid_mercari_row(module)
+    row["商品画像名_1"] = ""
+
+    with pytest.raises(module.MercariExportValidationError) as error:
+        module.prepare_mercari_upload_rows(
+            "2026-07-07",
+            [module.dict_row_to_list(module.MERCARI_HEADERS, row)],
+        )
+
+    assert error.value.issues[0].field == "商品画像名_1"
+
+
 def test_item_image_proxies_private_gcs_image(monkeypatch):
     module = load_review_ui_module()
     image_url = "https://storage.googleapis.com/product-images/exports/2026-07-07/A0001/001.jpg"
@@ -362,17 +444,39 @@ def test_item_image_rejects_non_image_extension(monkeypatch):
 def test_export_posts_generates_gcs_object_without_live_gcs(monkeypatch):
     module = load_review_ui_module()
     client = module.app.test_client()
-    monkeypatch.setattr(module, "list_review_items", lambda batch_id: [])
+    row = valid_mercari_row(module)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     monkeypatch.setattr(
         module,
-        "export_approved_mercari_rows_and_csv",
-        lambda batch_prefix: (1, "header\nrow\n"),
+        "build_approved_mercari_sheet_rows",
+        lambda batch_prefix: [
+            module.MERCARI_HEADERS,
+            module.dict_row_to_list(module.MERCARI_HEADERS, row),
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "prepare_mercari_upload_rows",
+        lambda batch_id, rows: ([row], expires_at),
+    )
+    replaced = []
+    monkeypatch.setattr(
+        module,
+        "replace_approved_mercari_sheet_rows",
+        lambda rows: replaced.append(rows),
     )
     uploaded = {}
     monkeypatch.setattr(
         module,
         "upload_approved_csv",
-        lambda batch_id, csv_text: uploaded.setdefault("object", module.approved_csv_object_name(batch_id)),
+        lambda batch_id, csv_bytes, expires: uploaded.update(
+            {
+                "object": module.approved_csv_object_name(batch_id),
+                "csv_bytes": csv_bytes,
+                "expires": expires,
+            }
+        )
+        or uploaded["object"],
     )
 
     response = client.post(
@@ -382,22 +486,24 @@ def test_export_posts_generates_gcs_object_without_live_gcs(monkeypatch):
 
     assert response.status_code == 302
     assert uploaded["object"] == "exports/2026-07-07/approved/mercari_shops.csv"
+    assert uploaded["csv_bytes"].startswith(b"\xef\xbb\xbf")
+    assert uploaded["expires"] == expires_at
+    assert replaced[0][0] == module.MERCARI_HEADERS
 
 
 def test_export_post_does_not_upload_when_no_approved_rows(monkeypatch):
     module = load_review_ui_module()
     client = module.app.test_client()
-    monkeypatch.setattr(module, "list_review_items", lambda batch_id: [])
     monkeypatch.setattr(
         module,
-        "export_approved_mercari_rows_and_csv",
-        lambda batch_prefix: (0, "header\n"),
+        "build_approved_mercari_sheet_rows",
+        lambda batch_prefix: [],
     )
     uploaded = []
     monkeypatch.setattr(
         module,
         "upload_approved_csv",
-        lambda batch_id, csv_text: uploaded.append((batch_id, csv_text)),
+        lambda batch_id, csv_bytes, expires: uploaded.append((batch_id, csv_bytes, expires)),
     )
 
     response = client.post(
@@ -407,6 +513,46 @@ def test_export_post_does_not_upload_when_no_approved_rows(monkeypatch):
 
     assert response.status_code == 302
     assert uploaded == []
+
+
+def test_export_validation_error_deletes_stale_csv_and_shows_item_error(monkeypatch):
+    module = load_review_ui_module()
+    client = module.app.test_client()
+    monkeypatch.setattr(
+        module,
+        "build_approved_mercari_sheet_rows",
+        lambda batch_prefix: [module.MERCARI_HEADERS, [""] * len(module.MERCARI_HEADERS)],
+    )
+    issue = module.MercariValidationIssue("A0001", "販売価格", "300円以上で入力してください")
+    monkeypatch.setattr(
+        module,
+        "prepare_mercari_upload_rows",
+        lambda batch_id, rows: (_ for _ in ()).throw(
+            module.MercariExportValidationError([issue])
+        ),
+    )
+    deleted = []
+    monkeypatch.setattr(
+        module,
+        "delete_approved_csv_if_exists",
+        lambda batch_id: deleted.append(batch_id),
+    )
+    monkeypatch.setattr(
+        module,
+        "upload_approved_csv",
+        lambda *args: pytest.fail("invalid CSV must not be uploaded"),
+    )
+
+    response = client.post(
+        "/batches/2026-07-07/export",
+        data={"csrf_token": csrf_from_session(client)},
+    )
+
+    assert response.status_code == 302
+    assert deleted == ["2026-07-07"]
+    with client.session_transaction() as session:
+        messages = [message for _, message in session["_flashes"]]
+    assert any("A0001 / 販売価格" in message for message in messages)
 
 
 def test_download_redirects_when_csv_has_not_been_generated(monkeypatch):
@@ -442,6 +588,109 @@ def test_item_page_redirects_when_draft_is_missing(monkeypatch):
 
     assert response.status_code == 302
     assert response.headers["Location"].endswith("/batches/2026-07-07")
+
+
+def test_download_preserves_utf8_bom_bytes(monkeypatch):
+    module = load_review_ui_module()
+    csv_bytes = b"\xef\xbb\xbfheader\r\nrow\r\n"
+
+    class FakeBlob:
+        def download_as_bytes(self):
+            return csv_bytes
+
+    monkeypatch.setattr(module, "current_approved_csv_blob", lambda batch_id: FakeBlob())
+
+    response = module.app.test_client().get("/batches/2026-07-07/download")
+
+    assert response.status_code == 200
+    assert response.data == csv_bytes
+    assert response.headers["Content-Disposition"].endswith(
+        'filename="2026-07-07_mercari_shops.csv"'
+    )
+
+
+def test_current_approved_csv_rejects_legacy_or_expired_file(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+
+    class FakeBlob:
+        def __init__(self, metadata):
+            self.metadata = metadata
+
+        def exists(self):
+            return True
+
+        def reload(self):
+            return None
+
+    class FakeBucket:
+        def __init__(self, blob):
+            self._blob = blob
+
+        def blob(self, object_name):
+            return self._blob
+
+    class FakeStorageClient:
+        def __init__(self, blob):
+            self._blob = blob
+
+        def bucket(self, bucket_name):
+            return FakeBucket(self._blob)
+
+    legacy_blob = FakeBlob({})
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient(legacy_blob))
+    assert module.current_approved_csv_blob("2026-07-07") is None
+
+    expired_blob = FakeBlob(
+        {
+            module.APPROVED_CSV_EXPIRES_METADATA: (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat()
+        }
+    )
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient(expired_blob))
+    assert module.current_approved_csv_blob("2026-07-07") is None
+
+
+def test_upload_approved_csv_sets_expiration_metadata(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+    class FakeBlob:
+        def __init__(self):
+            self.metadata = None
+            self.upload = None
+
+        def upload_from_string(self, data, content_type):
+            self.upload = (data, content_type)
+
+    blob = FakeBlob()
+
+    class FakeBucket:
+        def blob(self, object_name):
+            assert object_name == "exports/2026-07-07/approved/mercari_shops.csv"
+            return blob
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return FakeBucket()
+
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+
+    object_name = module.upload_approved_csv(
+        "2026-07-07",
+        b"\xef\xbb\xbfcsv",
+        expires_at,
+    )
+
+    assert object_name == "exports/2026-07-07/approved/mercari_shops.csv"
+    assert blob.upload == (b"\xef\xbb\xbfcsv", "text/csv; charset=utf-8")
+    assert blob.metadata[module.APPROVED_CSV_COLUMNS_METADATA] == "88"
+    assert module.parse_approved_csv_expiration(
+        blob.metadata[module.APPROVED_CSV_EXPIRES_METADATA]
+    ) == expires_at
 
 
 def test_restore_batch_items_from_gcs_repairs_review_and_draft(monkeypatch):
@@ -567,7 +816,11 @@ def test_repair_post_rejects_missing_csrf(monkeypatch):
 
 def test_export_post_rejects_missing_csrf(monkeypatch):
     module = load_review_ui_module()
-    monkeypatch.setattr(module, "export_approved_mercari_rows_and_csv", lambda batch_prefix: (1, "csv"))
+    monkeypatch.setattr(
+        module,
+        "build_approved_mercari_sheet_rows",
+        lambda batch_prefix: pytest.fail("export should require CSRF"),
+    )
 
     response = module.app.test_client().post("/batches/2026-07-07/export")
 
