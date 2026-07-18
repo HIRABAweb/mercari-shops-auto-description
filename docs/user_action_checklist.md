@@ -1,174 +1,57 @@
-# あなたがやることチェックリスト
+# 運用者チェックリスト
 
-このファイルは、Phase 1 Review UIを本番で使い始める前に、あなたが確認・判断することだけをまとめたものです。
+このファイルは、Review UIを日常運用するときに人が確認する項目をまとめています。実際のGoogle CloudプロジェクトID、bucket名、Spreadsheet ID、メールアドレス、secretは公開文書へ記載しません。
 
-## まず知っておくこと
+## 通常運用
 
-開発側でできるコード修正、テスト、PR反映は進めています。
+1. 商品ごとに画像と `_SUCCESS.txt` を登録する
+2. 処理完了後、Review UIで対象batchを開く
+3. 商品画像、画像順、商品名、説明、価格、カテゴリ、状態、配送設定を確認する
+4. 修正だけを保存する場合は `Save`、確認完了なら `Save & Approve` を押す
+5. batch内の必要商品を承認したら `Generate CSV` を押す
+6. `Download CSV` からCSVを取得する
+7. 生成から7日以内にメルカリShopsへアップロードする
+8. メルカリShops側で画像と商品情報を最終確認してから出品する
 
-ただし、次の作業は本番のGoogle CloudやメルカリShopsに関わるため、あなたの確認なしには進めません。
+## ボタンの使い分け
 
-- お金が発生する可能性がある設定
-- 本番の権限設定
-- 本番デプロイ
-- メルカリShopsへの実アップロード
+- `Save`: 編集内容を保存し、商品を未承認へ戻す
+- `Save & Approve`: 編集内容を保存して承認する
+- `Generate CSV`: 承認済み商品だけで公式CSVを作り直す
+- `Download CSV`: 最後に正常生成された有効期限内のCSVを取得する
+- `Repair from GCS`: Sheetsの行が欠けた場合だけ、GCSの処理済み成果物から復元する
+
+通常の編集・承認後に `Repair from GCS` を押す必要はありません。
+
+## CSVの有効期限
+
+最終CSVの画像URLは生成から7日間有効です。期限を過ぎた場合は、同じbatchで `Generate CSV` をもう一度押してからダウンロードします。
+
+## エラー時
+
+- 商品情報の不足: Review UIで内容を修正して再承認する
+- Draft行不足: `Repair from GCS` を1回実行する
+- CSV検証エラー: 画面に表示された商品管理コードと項目を修正する
+- 画像が表示されない: 商品画像がGCSに残っているか確認する
+- Googleログインできない: Review UIの許可ユーザーとIAP設定を管理者が確認する
+- GCS、Sheets、Gemini、文字コードなどの基盤エラー: 再試行を繰り返さず、Cloud Loggingを確認する
+
+## 本番変更で承認が必要なこと
+
 - mainへのマージ
+- Cloud Run / Cloud Run Functionsの本番デプロイ
+- IAM権限の追加・変更
+- 新しい有料サービスの有効化
+- 保存期間やbucket構成の変更
 
-## あなたが決めること
+## 管理者だけが保持する情報
 
-### 1. 本番デプロイしてよいか
+次の値はSecret Manager、Cloud Run環境変数、Google Cloud Consoleなどで管理し、Gitやチャットへ貼りません。
 
-Review UIは新しいCloud Runサービスとして動かします。
-
-デプロイすると、少額でもGoogle Cloudの料金が発生する可能性があります。
-そのため、デプロイしてよいかをあなたが決める必要があります。
-
-確認すること:
-
-- Cloud Runを作ってよい
-- Artifact RegistryにDocker imageを置いてよい
-- 課金アラートや予算をGoogle Cloudで設定・確認した
-
-補足:
-
-課金アラートや予算は、Google CloudのBilling画面で設定します。
-この設定はお金に関わるため、基本的にはあなたがGoogle Cloud上で確認してください。
-こちらでは手順書の整備や、設定後のデプロイ手順の準備を進めます。
-
-現在の状態:
-
-- 課金アラート/予算は設定済み
-- Project IDは `gen-lang-client-0122735738`
-- Google Cloud CLIはこのPCにインストール済み
-- ただし、Googleログインはまだ必要
-
-### 2. 本番のbucket名
-
-Review UIは、商品画像を読むためにGCS bucketへアクセスします。
-また、承認済みCSVも同じbucketに保存します。
-
-確認すること:
-
-- bucket名は `test-review-ui`
-- `PRODUCT_BUCKET_NAME` に `test-review-ui` を設定してよい
-
-### 3. 権限を付けてよいか
-
-Review UIのCloud Run service accountには、次の権限が必要です。
-
-- Google Spreadsheetを編集する権限
-- 商品画像をGCSから読む権限
-- 承認済みCSVをGCSへ書く権限
-
-確認すること:
-
-- Cloud Run用のservice accountを作ってよい
-- Spreadsheetに編集者として追加してよいか
-- GCS bucketの読み書き権限を付けてよいか
-
-注意:
-
-`hirabaaiwork@gmail.com` は、人間がReview UIへログインするためのアカウントです。
-Cloud RunのプログラムがGoogle SheetsやGCSへアクセスするには、別のservice accountが必要です。
-
-おすすめのservice account名:
-
-```text
-mercari-review-ui-sa
-```
-
-このservice accountをSpreadsheetの編集者に追加し、`test-review-ui` bucketを読み書きできるようにします。
-
-あなたが手動でやること:
-
-1. Google Cloud CLIで `hirabaaiwork@gmail.com` にログインする
-2. デプロイ後に表示されるservice accountメールアドレスをSpreadsheetの編集者に追加する
-
-service accountメールアドレスの形:
-
-```text
-mercari-review-ui-sa@gen-lang-client-0122735738.iam.gserviceaccount.com
-```
-
-Phase 1のReview UIへ商品処理結果を流すには、既存Cloud Functions用のservice accountもSpreadsheet編集者に追加する必要があります。
-
-```text
-183777458573-compute@developer.gserviceaccount.com
-```
-
-役割の違い:
-
-- `mercari-review-ui-sa@...`: Review UIがSpreadsheetを読む/編集するため
-- `183777458573-compute@...`: 商品処理FunctionsがSpreadsheetへ下書き・レビュー行を書き込むため
-
-### 4. 誰がReview UIに入れるか
-
-今の予定では、Review UIはIAPで守ります。
-アクセスできる人は `hirabaaiwork@gmail.com` に限定します。
-
-確認すること:
-
-- `hirabaaiwork@gmail.com` でログインできる
-- それ以外の人を入れない運用でよい
-
-ここはあなたの希望どおり、`hirabaaiwork@gmail.com` だけを許可する方針です。
-
-現在の追加確認:
-
-- Review UI URLで `Empty Google Account OAuth client ID(s)/secret(s).` が出る場合、アプリではなくIAPのOAuth設定が未完了です。
-- Project `gen-lang-client-0122735738` は組織なしプロジェクトのため、初回のIAP OAuth設定はGoogle Cloud Consoleで行う必要があります。
-- Cloud Runの `mercari-review-ui` でIAP OAuth/Google Auth Platformを設定してください。
-- Audienceは `External` を選び、`hirabaaiwork@gmail.com` でログインできるようにしてください。
-- Consoleに「auto-generate credentials」の選択肢があれば、それを使うのが一番簡単です。
-- 手動でOAuth client ID/secretを作る場合、secretはチャットに貼らず、Console上で設定するか `scripts/apply_iap_oauth_settings.ps1` を手元で実行してください。
-
-### 5. 実データで確認する
-
-デプロイ後、実際の商品で動作確認が必要です。
-
-確認すること:
-
-- `/healthz` が `ok` を返す
-- Review UIに商品一覧が出る
-- 商品画像が表示される
-- 商品名や説明文を編集できる
-- `Save` だけ押すと未承認に戻る
-- `Save & Approve` で承認できる
-- 承認済みCSVを生成できる
-- CSVをダウンロードできる
-
-### 6. メルカリShopsへCSVをアップロードする
-
-最後は、ダウンロードしたCSVをメルカリShopsに入れて確認します。
-
-確認すること:
-
-- CSVがメルカリShopsに読み込まれる
-- 商品画像が正しく取り込まれる
-- 商品名、説明文、価格、カテゴリ、状態が正しい
-- 下書き保存または出品まで問題なく進める
-
-## あなたがやらなくてよいこと
-
-次の作業はこちらで進められます。
-
-- コード修正
-- テスト追加
-- READMEや手順書の更新
-- PRブランチへのcommit / push
-- PR上の説明コメント更新
-- コードレビュー
-- 本番前チェックリストの整備
-
-## いま止まる場所
-
-コード開発は進められます。
-
-ただし、本当に本番で使えるかは、次の確認が終わらないと判断できません。
-
-1. Google Cloudへデプロイしてよいか
-2. IAPとIAMを設定してよいか
-3. 実データでReview UIを開けるか
-4. CSVをメルカリShopsへアップロードできるか
-
-この4つは、あなたの確認が必要です。
+- Google CloudプロジェクトID
+- bucket名
+- Spreadsheet ID
+- OAuth client secret
+- Flask secret
+- APIキー
+- service account認証情報

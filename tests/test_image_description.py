@@ -196,6 +196,22 @@ class ImageDescriptionTest(unittest.TestCase):
         self.assertEqual(measurement_info, "")
         self.assertFalse(measurement_available)
 
+    def test_success_file_gcs_read_failure_is_raised(self):
+        source = FakeBlob("A0001/_SUCCESS.txt", data=b"size: 10cm")
+        source.download_as_text = lambda encoding=None: (_ for _ in ()).throw(
+            RuntimeError("GCS read failed")
+        )
+        bucket = FakeBucket([source])
+
+        with self.assertRaisesRegex(RuntimeError, "GCS read failed"):
+            self.module.load_measurement_info(bucket, "A0001/_SUCCESS.txt")
+
+    def test_success_file_decode_failure_is_raised(self):
+        bucket = FakeBucket([FakeBlob("A0001/_SUCCESS.txt", data=b"\xff")])
+
+        with self.assertRaises(UnicodeDecodeError):
+            self.module.load_measurement_info(bucket, "A0001/_SUCCESS.txt")
+
     def test_success_trigger_file_name_must_be_exact_under_product_folder(self):
         self.assertEqual(self.module.SUCCESS_FILE_NAME, "_SUCCESS.txt")
         self.assertTrue(self.module.is_success_file("A0001/_SUCCESS.txt"))

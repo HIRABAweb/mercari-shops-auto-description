@@ -16,7 +16,12 @@
     <div class="heading-actions">
       <form method="post" action="{{ url_for('repair_batch', batch_id=batch_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="button" type="submit">Repair from GCS</button>
+        <button
+          class="button"
+          type="submit"
+          title="処理済みデータからSheetsの欠けた商品を復元"
+          onclick="return confirm('商品が一覧から欠けている場合だけ実行します。復元しますか？')"
+        >欠けた商品を復元</button>
       </form>
       <form method="post" action="{{ url_for('export_batch', batch_id=batch_id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

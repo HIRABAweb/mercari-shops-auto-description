@@ -118,6 +118,63 @@ def test_write_phase1_sheet_rows_creates_headers_and_is_idempotent(monkeypatch):
     assert len(yahoo.values) == 2
 
 
+def test_two_ten_item_batches_stay_isolated_and_retries_are_idempotent(monkeypatch):
+    spreadsheet = FakeSpreadsheet()
+    monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
+
+    batch_prefixes = ("exports/2026-07-18", "exports/2026-07-19")
+    for batch_prefix in batch_prefixes:
+        for item_number in range(1, 11):
+            product_code = f"A{item_number:04d}"
+            image_url = (
+                "https://storage.googleapis.com/product-images/"
+                f"{batch_prefix}/{product_code}/001.jpg"
+            )
+            kwargs = {
+                "mercari_row": mercari_row(image_url, product_code),
+                "yahoo_row": yahoo_row(image_url),
+                "review_rows": [],
+                "folder_path": f"{batch_prefix}/{product_code}",
+                "product_code": product_code,
+                "file_path": f"{batch_prefix}/{product_code}/_description.txt",
+            }
+            sheets_workflow.write_phase1_sheet_rows(**kwargs)
+            sheets_workflow.write_phase1_sheet_rows(**kwargs)
+
+    draft = spreadsheet.sheets[sheets_workflow.SHEET_NAME_DRAFT_MERCARI]
+    review = spreadsheet.sheets[sheets_workflow.SHEET_NAME_REVIEW]
+    yahoo = spreadsheet.sheets[sheets_workflow.SHEET_NAME_YAHOO]
+    assert len(draft.values) == 21
+    assert len(review.values) == 21
+    assert len(yahoo.values) == 21
+
+    summaries = {
+        summary.batch_prefix: summary
+        for summary in sheets_workflow.list_batch_summaries()
+    }
+    for batch_prefix in batch_prefixes:
+        assert summaries[batch_prefix].total_count == 10
+        assert summaries[batch_prefix].approved_count == 10
+
+    spreadsheet.sheets[sheets_workflow.SHEET_NAME_APPROVED_MERCARI] = FakeWorksheet(
+        sheets_workflow.SHEET_NAME_APPROVED_MERCARI,
+        [["old row"]],
+    )
+    first_count, first_csv = sheets_workflow.export_approved_mercari_rows_and_csv(
+        batch_prefixes[0]
+    )
+    second_count, second_csv = sheets_workflow.export_approved_mercari_rows_and_csv(
+        batch_prefixes[1]
+    )
+
+    assert first_count == 10
+    assert second_count == 10
+    assert f"/{batch_prefixes[0]}/" in first_csv
+    assert f"/{batch_prefixes[1]}/" not in first_csv
+    assert f"/{batch_prefixes[1]}/" in second_csv
+    assert f"/{batch_prefixes[0]}/" not in second_csv
+
+
 def test_ensure_sheet_header_inserts_header_when_first_row_is_data(monkeypatch):
     spreadsheet = FakeSpreadsheet()
     monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)

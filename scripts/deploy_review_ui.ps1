@@ -1,10 +1,14 @@
 param(
-    [string]$ProjectId = "gen-lang-client-0122735738",
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectId,
     [string]$Region = "asia-northeast1",
     [string]$ServiceName = "mercari-review-ui",
-    [string]$ProductBucketName = "test-review-ui",
-    [string]$SpreadsheetId = "16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc",
-    [string]$AllowedUser = "hirabaaiwork@gmail.com",
+    [Parameter(Mandatory = $true)]
+    [string]$ProductBucketName,
+    [Parameter(Mandatory = $true)]
+    [string]$SpreadsheetId,
+    [Parameter(Mandatory = $true)]
+    [string]$AllowedUser,
     [string]$ServiceAccountName = "mercari-review-ui-sa",
     [int]$MercariImageSignedUrlTtlHours = 168,
     [string]$FlaskSecretKey = ""

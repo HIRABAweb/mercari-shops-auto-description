@@ -35,7 +35,11 @@ from csv_export import (
     build_csv_text,
     build_export_rows,
 )
-from listing_data import collect_sorted_image_urls
+from listing_data import (
+    build_product_info_review_rows,
+    collect_sorted_image_urls,
+    parse_product_info,
+)
 from sheets_workflow import (
     export_approved_mercari_rows,
     phase1_sheets_enabled,
@@ -55,6 +59,7 @@ LOCAL_CATEGORY_MASTER_FILE_NAME = "category_master_updated.csv"
 
 DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSED_FILE_NAME = "_processed.txt"
+SUCCESS_FILE_NAME = "_SUCCESS.txt"
 PROCESSING_LOCK_FILE_NAME = "_processing.lock"
 EXPORT_ROOT = "exports"
 _MODEL = None
@@ -123,20 +128,11 @@ def get_model():
 
 
 def get_prompt_from_gcs() -> str:
-    """Load the listing metadata prompt, with the existing fallback."""
+    """Load the managed listing prompt; storage failures must stop processing."""
     prompt_bucket_name = get_required_env("PROMPT_BUCKET_NAME")
     prompt_file_name = get_required_env("PROMPT_FILE_NAME")
-    try:
-        prompt_blob = storage_client.bucket(prompt_bucket_name).blob(prompt_file_name)
-        return prompt_blob.download_as_text()
-    except Exception as error:
-        LOGGER.warning(
-            "プロンプトの読み込みに失敗したためデフォルトを使用します: bucket=%s file=%s error=%s",
-            prompt_bucket_name,
-            prompt_file_name,
-            error,
-        )
-        return "商品の情報を整理し、出品用の商品説明本文と属性をJSONで作成してください。"
+    prompt_blob = storage_client.bucket(prompt_bucket_name).blob(prompt_file_name)
+    return prompt_blob.download_as_text(encoding="utf-8")
 
 
 def is_description_file(object_name: str) -> bool:
@@ -249,6 +245,12 @@ def generate_product_attributes(source_description: str) -> ProductAttributes:
     prompt = build_generation_prompt(get_prompt_from_gcs(), source_description)
     response_text = get_model().generate_content(prompt).text
     return parse_product_attributes(response_text)
+
+
+def load_product_info(bucket, folder_path: str) -> str:
+    """Read the formal product input; storage and decode failures must stop processing."""
+    object_name = f"{folder_path}/{SUCCESS_FILE_NAME}"
+    return bucket.blob(object_name).download_as_text(encoding="utf-8")
 
 
 def build_result_payload(
@@ -393,6 +395,7 @@ def generate_dual_listing(cloud_event):
             raise RuntimeError(f"処理ロックを取得できません: {description_file_name}")
 
         source_description = description_blob.download_as_text()
+        product_info = parse_product_info(load_product_info(bucket, context.folder_path))
         image_urls = collect_sorted_image_urls(
             storage_client.list_blobs(bucket_name, prefix=f"{context.folder_path}/"),
             bucket_name,
@@ -422,7 +425,11 @@ def generate_dual_listing(cloud_event):
             brand_match=brand_match,
             category_match=category_match,
         )
-        review_required = bool(export_rows.review_rows)
+        review_rows = [
+            *export_rows.review_rows,
+            *build_product_info_review_rows(context.product_code, product_info),
+        ]
+        review_required = bool(review_rows)
         result_payload = build_result_payload(
             context=context,
             category_id=category_match.category_id,
@@ -436,7 +443,7 @@ def generate_dual_listing(cloud_event):
             context,
             export_rows.mercari_row,
             export_rows.yahoo_row,
-            export_rows.review_rows,
+            review_rows,
             result_payload,
             write_done=False,
         )
@@ -444,7 +451,7 @@ def generate_dual_listing(cloud_event):
             write_phase1_sheet_rows(
                 mercari_row=export_rows.mercari_row,
                 yahoo_row=export_rows.yahoo_row,
-                review_rows=export_rows.review_rows,
+                review_rows=review_rows,
                 folder_path=context.folder_path,
                 product_code=context.product_code,
                 file_path=description_file_name,

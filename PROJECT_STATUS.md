@@ -1,12 +1,12 @@
 # PROJECT_STATUS.md
 
-## 2026-07-10 更新: PR #6をmain最新ドキュメントへ追従
+## 2026-07-18 更新: PR #6実機検証完了・main統合準備
 
 ### 結論
 
-mainは「安定版MVP」、PR #6は「Review UI / Google Sheets承認フローを追加する最新開発ブランチ」として扱います。
+mainは「安定版MVP」、PR #6は「Review UI / Google Sheets承認フローを追加するリリース候補」として扱います。
 
-PR #7でmainへ反映した公開向け整理文に合わせ、PR #6側のREADME / PROJECT_STATUSも追従しました。コード、Review UI本体、Cloud Functions本体の処理はこの追従更新では変更していません。
+PR #6のReview UIはCloud Runで稼働し、Googleログイン、商品表示、編集、画像並び替え、承認、公式88列CSV生成・ダウンロード、メルカリShopsへの実投入まで確認済みです。main統合前の最終レビューとGitHub整理を進めます。
 
 ---
 
@@ -60,7 +60,7 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 採用向けには、次のように説明します。
 
 ```text
-安定版ではメルカリShops向けCSV生成と下書き保存まで実機検証済みです。現在は、AI生成結果を人間が確認・承認できるよう、Google SheetsとReview UIを使った承認フローをPR #6で開発中です。
+安定版ではメルカリShops向けCSV生成と下書き保存まで実機検証済みです。PR #6では、AI生成結果をGoogle SheetsとReview UIで確認・修正・承認し、公式CSVを生成するフローを実装・実機検証しました。
 ```
 
 ---
@@ -92,19 +92,26 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 
 ---
 
-## 本番前に確認すること
+## 確認済み
 
-- Cloud Run IAPまたはGoogle認証設定
-- Review UIの許可ユーザー設定
-- Review UI runtime service accountのSpreadsheet編集権限
-- Review UI runtime service accountの商品画像GCS read権限
-- Review UI runtime service accountの承認済みCSV GCS write権限
-- Review UI runtime service account自身への `roles/iam.serviceAccountTokenCreator`
-- `yahuoku-to-mercarishops` runtime service accountのSpreadsheet編集権限
-- `/healthz` が `ok` を返すこと
-- private bucketの商品画像サムネイルがReview UIで表示できること
-- 実データで署名付き画像URLの未認証取得とMercari Shops CSVアップロードを最終確認すること
-- Cloud Run `min-instances=0`、`max-instances=1`、budget/alert、Artifact Registry画像削除運用を確認すること
+- Cloud RunのGoogleログインと許可ユーザー制限
+- runtime service accountのSpreadsheet / GCS / 署名権限
+- private bucketの商品画像表示
+- 商品編集、カテゴリ選択、画像並び替え、Save / Save & Approve
+- 承認済み商品だけの公式88列CSV生成
+- UTF-8 BOM、署名付き画像URLの未認証取得
+- メルカリShopsへのCSVアップロード成功
+- 標準自動テスト110件、重複構成を含む全117件成功
+- 10商品×2batchと同一イベント再実行の自動テスト成功
+- `_SUCCESS.txt`と管理プロンプトの読込・decode障害を例外停止へ統一
+- `状態メモ`、`状態`、`コンディション`、`特記事項`、`備考`、`注意点`を明示ラベルとして解析
+
+## 継続確認
+
+- 実データで異なる日付の10商品batchを2回処理して混在しないこと
+- 実環境のリトライ・途中失敗からの復旧で重複しないこと
+- Yahooオークション側へのCSV実投入
+- Artifact Registryの古いimage削除運用
 
 ---
 
@@ -114,7 +121,7 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 |---|---|---|
 | PR #4 | open | 入力仕様・生成品質改善候補。PR #6との整合確認後に判断する |
 | PR #5 | open / draft | 現時点では触らない。PR #6の旧プロトタイプ候補として保留する |
-| PR #6 | open / draft | 最新開発本線。Review UI / Google Sheets承認フローとして扱う |
+| PR #6 | open / draft | 実機検証済みのリリース候補。最終レビューとmain統合待ち |
 | PR #7 | merged | 公開向けGitHub整理としてmainへ反映済み |
 
 ---
@@ -124,7 +131,7 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 ### 書いてよい表現
 
 ```text
-リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発。メルカリShopsへのCSVアップロード、下書き保存、画像表示まで実機検証済み。現在はAI生成結果を人間が確認・承認できるReview UI / Google Sheets承認フローを開発中。
+リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発。AI生成結果をReview UIで確認・修正・承認し、公式CSVをメルカリShopsへアップロードできるところまで実機検証済み。
 ```
 
 ### 避ける表現
@@ -137,30 +144,31 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 
 - Yahooオークションへの実投入は未検証
 - AI生成結果は人間確認前提
-- Review UI / Sheets承認フローはPR #6で開発中
+- Yahooオークション側は実投入未検証
 
 ---
 
 ## 直近のTODO
 
-1. PR #6をmain最新ドキュメントへ追従させる
-2. PR #6のmergeabilityを確認する
-3. Review UIの本番前チェックを進める
-4. PR #4をPR #6とどう整合させるか判断する
-5. PR #5は現時点では触らない
-6. docs/evidenceのスクショに不要な内部情報が写っていないか確認する
+1. PR #6へmainを取り込み、最終テスト・レビューを行う
+2. PR #6へ最新変更をpushし、Draft解除可否を判断する
+3. 10商品×2batchの混在・リトライ試験を行う
+4. PR #4の未反映機能を精査する
+5. PR #6統合後に旧PR #5の終了を判断する
+6. Webアップロード画面など次段階の操作改善を進める
 
 ---
 
 ## 過去の主要マイルストーン
 
-### 2026-07-08: Review UI / Phase 1承認フローの実装確認中
+### 2026-07-18: Review UI / 公式CSVの実機検証完了
 
 - Review UIをCloud Runで動かす構成を追加
 - Google Sheets承認フローを追加
 - Draft / Review / Approved / Yahoo の各シート連携を追加
 - Review UIから編集・承認・承認済みCSV生成を行う構成にした
-- IAP、サービスアカウント権限、Spreadsheet編集権限、画像表示、CSV投入の確認が本番前課題
+- 公式88列・UTF-8 BOM・署名付き画像URLのCSVを生成
+- メルカリShopsへの実際のCSVアップロードに成功
 
 ### 2026-07-01: PR #2最終確認と実機検証
 

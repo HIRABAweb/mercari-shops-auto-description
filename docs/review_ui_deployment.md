@@ -1,279 +1,123 @@
-# Review UI deployment draft
+# Review UI deployment
 
-This document records the intended production deployment shape for the Phase 1
-Review UI. Do not run these commands until deployment is explicitly approved.
+Review UIは`review-ui/Dockerfile`からCloud Runへデプロイします。本番デプロイ、IAM変更、新しい有料リソースの作成はユーザー承認後に行います。
 
-For a plain-language checklist of decisions and manual checks required from the
-operator, see `docs/user_action_checklist.md`.
+実際のプロジェクトID、bucket名、Spreadsheet ID、許可ユーザー、OAuth secretはGitへ記録しません。
 
-## Decisions
+## 構成
 
-- Service name: `mercari-review-ui`
-- Runtime: Cloud Run service, built from `review-ui/Dockerfile`
+- Cloud Run service: `mercari-review-ui`
 - Authentication: Cloud Run direct IAP
-- Allowed user: `hirabaaiwork@gmail.com`
-- Spreadsheet ID: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
-- `PRODUCT_BUCKET_NAME`: `test-review-ui`
-- Approved CSV object path: `exports/{batch_id}/approved/mercari_shops.csv`
-- Approved CSV image URLs: private GCS objects exposed with 7-day V4 signed URLs
-- `FLASK_SECRET_KEY`: required on Cloud Run
-- Cost guardrails:
-  - `--min-instances=0`
-  - `--max-instances=1`
-  - `--no-allow-unauthenticated`
-  - `--iap`
-  - Do not create a new bucket unless the existing product bucket cannot be reused.
-  - Delete old Artifact Registry images after deployment validation.
+- Runtime service account: 専用service account
+- Minimum instances: `0`
+- Maximum instances: `1`
+- Public access: disabled
+- Approved CSV: `exports/{batch_id}/approved/mercari_shops.csv`
+- Image access: 7日間有効のV4署名付きURL
 
-## Bucket choice
+## 必要な値
 
-`PRODUCT_BUCKET_NAME` is set to `test-review-ui` for this deployment plan.
-Contractors should upload product images and `_SUCCESS.txt` under this bucket if
-this Review UI deployment is used for production verification.
-
-The Review UI does not embed private GCS image URLs directly in the page. It
-serves item thumbnails through a Cloud Run image proxy and only allows objects
-from `PRODUCT_BUCKET_NAME`, so the Cloud Run service account must be able to read
-the uploaded product images in that bucket.
-
-Creating or using this bucket can create storage costs, so confirm the project
-budget/alert before deployment.
-
-## Service account
-
-`hirabaaiwork@gmail.com` is the human user allowed to open the Review UI through
-IAP. It is not the runtime service account used by Cloud Run.
-
-Use a dedicated runtime service account for the service:
+デプロイ前に、ローカルで次を用意します。
 
 ```text
-mercari-review-ui-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com
+YOUR_PROJECT_ID
+YOUR_PRODUCT_BUCKET
+YOUR_SPREADSHEET_ID
+operator@example.com
 ```
 
-This runtime service account needs:
+これらはコマンド引数またはCloud Run環境変数として渡し、ソースコードへ書きません。
 
-- Edit access to the target Google Spreadsheet.
-- Read access to product images in `test-review-ui`.
-- Write access to approved CSV objects in `test-review-ui`.
-- Permission to sign its own GCS image URLs (`roles/iam.serviceAccountTokenCreator`
-  on the runtime service account itself).
+## Runtime service account
 
-## Build and deploy commands
+専用service accountには次の権限が必要です。
 
-The repository now includes a PowerShell deployment helper:
+- 商品画像のGCS read
+- 承認済みCSVのGCS create / update / delete
+- 自分自身で短期間の署名付きURLを作る権限
+- 対象Spreadsheetの編集者権限
+
+Review UI専用bucketを使う場合はbucket単位のobject権限を利用できます。商品bucketを他用途と共有する場合は、IAM Conditionまたは別bucketで権限範囲を限定してください。
+
+署名用にruntime service account自身へ次を付与します。
+
+```text
+roles/iam.serviceAccountTokenCreator
+```
+
+## デプロイスクリプト
+
+リポジトリルートから実行します。実際の値はローカルで指定してください。
 
 ```powershell
-.\scripts\deploy_review_ui.ps1
+.\scripts\deploy_review_ui.ps1 `
+  -ProjectId "YOUR_PROJECT_ID" `
+  -ProductBucketName "YOUR_PRODUCT_BUCKET" `
+  -SpreadsheetId "YOUR_SPREADSHEET_ID" `
+  -AllowedUser "operator@example.com"
 ```
 
-The helper uses these approved defaults:
+スクリプトは次を行います。
 
-- `ProjectId`: `gen-lang-client-0122735738`
-- `ProductBucketName`: `test-review-ui`
-- `SpreadsheetId`: `16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc`
-- `AllowedUser`: `hirabaaiwork@gmail.com`
-- `ServiceAccountName`: `mercari-review-ui-sa`
+1. 必要なGoogle Cloud APIを有効化する
+2. bucket、Artifact Registry、service accountがなければ作成する
+3. runtime service accountへGCS・署名権限を設定する
+4. Cloud Buildでimageを作成する
+5. Cloud RunをIAP・`min-instances=0`・`max-instances=1`でデプロイする
+6. 指定ユーザーへIAPアクセスを付与する
 
-Set these values manually only if you are not using the helper script:
+実行前に課金アラートと予算を確認してください。
 
-```powershell
-$ProjectId = "gen-lang-client-0122735738"
-$Region = "asia-northeast1"
-$ServiceName = "mercari-review-ui"
-$Image = "$Region-docker.pkg.dev/$ProjectId/review-ui/$ServiceName:latest"
-$ProductBucketName = "test-review-ui"
-$SpreadsheetId = "16mcXnRgC4Mqx5ghUsNqjLpg87sC4Ss591osfZNIlKsc"
-$AllowedUser = "hirabaaiwork@gmail.com"
-$ProjectNumber = "YOUR_PROJECT_NUMBER"
-$FlaskSecretKey = "REPLACE_WITH_RANDOM_SECRET"
-$ServiceAccountName = "mercari-review-ui-sa"
-$ServiceAccountEmail = "$ServiceAccountName@$ProjectId.iam.gserviceaccount.com"
-```
+## Spreadsheet
 
-Enable required APIs only if they are not already enabled:
+Cloud Runのruntime service accountを、対象Spreadsheetの編集者へ追加します。人間のログインユーザーだけを編集者にしても、Cloud Runからはアクセスできません。
 
-```powershell
-gcloud services enable `
-  run.googleapis.com `
-  artifactregistry.googleapis.com `
-  cloudbuild.googleapis.com `
-  iap.googleapis.com `
-  --project=$ProjectId
-```
+商品処理FunctionsからSheetsへ下書きを書く場合は、そのFunctionsのruntime service accountにもSpreadsheet編集権限が必要です。
 
-Create the GCS bucket only if it does not already exist:
+## IAP OAuth
 
-```powershell
-gcloud storage buckets create "gs://$ProductBucketName" `
-  --location=$Region `
-  --project=$ProjectId
-```
-
-Create the Artifact Registry repository only if it does not already exist:
-
-```powershell
-gcloud artifacts repositories create review-ui `
-  --repository-format=docker `
-  --location=$Region `
-  --project=$ProjectId
-```
-
-Create the Cloud Run runtime service account only if it does not already exist:
-
-```powershell
-gcloud iam service-accounts create $ServiceAccountName `
-  --display-name="Mercari Review UI runtime" `
-  --project=$ProjectId
-```
-
-Grant the runtime service account read/write access to the review bucket:
-
-```powershell
-gcloud storage buckets add-iam-policy-binding "gs://$ProductBucketName" `
-  --member="serviceAccount:$ServiceAccountEmail" `
-  --role="roles/storage.objectAdmin" `
-  --project=$ProjectId
-```
-
-Enable the IAM Service Account Credentials API and allow the runtime service
-account to sign its own short-lived image URLs. This does not make the bucket
-public:
-
-```powershell
-gcloud services enable iamcredentials.googleapis.com --project=$ProjectId
-
-gcloud iam service-accounts add-iam-policy-binding $ServiceAccountEmail `
-  --member="serviceAccount:$ServiceAccountEmail" `
-  --role="roles/iam.serviceAccountTokenCreator" `
-  --project=$ProjectId
-```
-
-Share the Spreadsheet with `$ServiceAccountEmail` as an editor before using the
-Review UI. Sharing it with `hirabaaiwork@gmail.com` lets the human user open the
-sheet, but the Cloud Run app itself needs the runtime service account to be an
-editor too.
-
-Build the image from the repository root. Use `cloudbuild.review-ui.yaml` so
-Cloud Build uses `review-ui/Dockerfile` explicitly:
-
-```powershell
-gcloud builds submit . `
-  --config=cloudbuild.review-ui.yaml `
-  --substitutions="_IMAGE=$Image" `
-  --project=$ProjectId
-```
-
-Deploy Cloud Run with IAP and zero idle instances:
-
-```powershell
-gcloud run deploy $ServiceName `
-  --image=$Image `
-  --region=$Region `
-  --project=$ProjectId `
-  --min-instances=0 `
-  --max-instances=1 `
-  --memory=512Mi `
-  --cpu=1 `
-  --no-allow-unauthenticated `
-  --iap `
-  --service-account=$ServiceAccountEmail `
-  --set-env-vars="SPREADSHEET_ID=$SpreadsheetId,PRODUCT_BUCKET_NAME=$ProductBucketName,APPROVED_CSV_OBJECT_TEMPLATE=exports/{batch_id}/approved/mercari_shops.csv,MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL=$ServiceAccountEmail,MERCARI_IMAGE_SIGNED_URL_TTL_HOURS=168,FLASK_SECRET_KEY=$FlaskSecretKey"
-```
-
-Grant Cloud Run invoker permission to the IAP service agent:
-
-```powershell
-gcloud run services add-iam-policy-binding $ServiceName `
-  --region=$Region `
-  --project=$ProjectId `
-  --member="serviceAccount:service-$ProjectNumber@gcp-sa-iap.iam.gserviceaccount.com" `
-  --role="roles/run.invoker"
-```
-
-Grant IAP access to the allowed user:
-
-```powershell
-gcloud iap web add-iam-policy-binding `
-  --member="user:$AllowedUser" `
-  --role="roles/iap.httpsResourceAccessor" `
-  --region=$Region `
-  --resource-type=cloud-run `
-  --service=$ServiceName `
-  --project=$ProjectId
-```
-
-## IAP OAuth setup
-
-If the Review UI URL returns the following response, Cloud Run is deployed but
-IAP does not yet have OAuth credentials configured:
+初回アクセスで次が表示される場合、IAP OAuth設定が未完了です。
 
 ```text
 Empty Google Account OAuth client ID(s)/secret(s).
 ```
 
-This is common when direct IAP is enabled from `gcloud` in a project that is not
-under a Google Cloud Organization. Google Cloud can grant the IAP access role
-from the CLI, but the first OAuth client setup must be completed in the Google
-Cloud console or by applying a custom OAuth client.
+Google Cloud Consoleで対象Cloud Run serviceのIAP / Google Auth Platformを設定します。公開ユーザーを増やさず、必要な運用者だけへ`roles/iap.httpsResourceAccessor`を付与します。
 
-Recommended manual path:
-
-1. Open Google Cloud Console.
-2. Select project `gen-lang-client-0122735738`.
-3. Open Cloud Run, then service `mercari-review-ui`.
-4. Open the Security or IAP settings.
-5. Configure IAP OAuth/Google Auth Platform.
-6. Use an External audience so `hirabaaiwork@gmail.com` can sign in.
-7. Use auto-generated credentials if the console offers that option.
-8. Confirm `hirabaaiwork@gmail.com` remains the only IAP user with
-   `roles/iap.httpsResourceAccessor`.
-9. Open the Review UI URL again.
-
-If you manually create a custom OAuth client instead, create a Web application
-OAuth client and add this redirect URI:
-
-```text
-https://iap.googleapis.com/v1/oauth/clientIds/CLIENT_ID:handleRedirect
-```
-
-Replace `CLIENT_ID` with the OAuth client ID you just created.
-
-After creating the custom OAuth client, either apply it in the Google Cloud
-Console or run the helper below. Do not paste the OAuth client secret into chat
-or commit it to the repository.
+カスタムOAuth clientを使う場合は、secretをチャットやGitへ貼らず、ローカルで次を実行します。
 
 ```powershell
-.\scripts\apply_iap_oauth_settings.ps1
+.\scripts\apply_iap_oauth_settings.ps1 -ProjectId "YOUR_PROJECT_ID"
 ```
 
-The helper prompts for the OAuth client ID and secret, writes a temporary local
-settings file, runs `gcloud iap settings set`, and deletes the temporary file.
+このスクリプトはclient IDとsecretを対話入力し、一時ファイルを処理後に削除します。
 
-## Production checklist
+## Cloud Run環境変数
 
-- Confirm billing budget/alert is configured before any deployment.
-- Confirm the `test-review-ui` bucket exists.
-- Prepare a random `FLASK_SECRET_KEY`.
-- Confirm Cloud Run IAP can be enabled in the target project.
-- Confirm IAP OAuth is configured; the Review UI must not show
-  `Empty Google Account OAuth client ID(s)/secret(s).`
-- Confirm `hirabaaiwork@gmail.com` can sign in through IAP.
-- Confirm `$ServiceAccountEmail` is an editor on the Spreadsheet.
-- Confirm `$ServiceAccountEmail` has read/write access to `test-review-ui`.
-- Confirm `$ServiceAccountEmail` can sign its own URLs with
-  `roles/iam.serviceAccountTokenCreator`.
-- Confirm `/healthz` returns `ok` after deployment.
-- Confirm private product thumbnails render in the Review UI.
-- Generate one approved CSV and verify it is saved to
-  `exports/{batch_id}/approved/mercari_shops.csv`.
-- Download the CSV from the UI, confirm its image URLs are reachable without a
-  Google login, and upload it to Mercari Shops within 7 days.
+| 変数 | 用途 |
+|---|---|
+| `SPREADSHEET_ID` | Review UIが参照するSpreadsheet |
+| `PRODUCT_BUCKET_NAME` | 商品画像と承認済みCSVを保持するbucket |
+| `APPROVED_CSV_OBJECT_TEMPLATE` | 承認済みCSVのobject path |
+| `MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL` | 画像URLへ署名するservice account |
+| `MERCARI_IMAGE_SIGNED_URL_TTL_HOURS` | URL有効時間。1〜168時間 |
+| `FLASK_SECRET_KEY` | session / CSRF署名用secret |
 
-## Optional approved CSV function
+`FLASK_SECRET_KEY`はCloud Runで必須です。デプロイスクリプトは未指定時にランダム生成します。
 
-The older `export_approved_mercari_csv` HTTP function is a fallback for
-rebuilding `Approved_Mercari_CSV` without the Review UI. It mutates Google
-Sheets, so it accepts POST requests only:
+## デプロイ後確認
+
+1. `/healthz`が`ok`を返す
+2. 許可ユーザーだけがGoogleログインできる
+3. private GCS画像がReview UIへ表示される
+4. Save / Save & Approveが動く
+5. 承認済みCSVを生成・ダウンロードできる
+6. CSV画像URLを未ログイン状態で取得できる
+7. CSVを7日以内にメルカリShopsへアップロードできる
+
+## 代替HTTP entrypoint
+
+`export_approved_mercari_csv`はReview UIを使えない場合の代替です。Sheetsを変更するためPOSTだけを受け付けます。
 
 ```powershell
 curl -X POST "$FunctionUrl?batch_prefix=exports/YOUR_BATCH_ID"

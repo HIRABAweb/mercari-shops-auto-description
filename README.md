@@ -8,7 +8,7 @@
 
 現時点の安定版では、メルカリShopsへのCSVアップロード、下書き保存、下書き画面での商品画像表示まで実機検証済みです。Yahooオークション向けCSV生成機能も実装していますが、Yahooオークション側への実投入は未検証です。
 
-このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、このPRではGoogle Sheets / Review UIを使った承認フローを追加しています。
+このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、PR #6ではGoogle Sheets / Review UIを使った承認フローを追加しています。Review UIから編集・承認・公式CSV生成を行い、メルカリShopsへ実際に取り込めることまで確認済みです。
 
 ---
 
@@ -17,10 +17,10 @@
 | 区分 | 状態 | 補足 |
 |---|---|---|
 | main | 安定版MVP | GCS上にCSV/JSONを出力する構成 |
-| PR #6 | 最新開発ブランチ | Google Sheets承認フローとReview UIを追加 |
+| PR #6 | リリース候補 | Google Sheets承認フローとReview UIを実装・実機検証済み。mainへの統合待ち |
 | PR #5 | 旧プロトタイプ | PR #6へ役割を移しているため、現時点では参照優先度を下げる |
 
-採用・ポートフォリオ用途では、まずmainを安定版として見せ、PR #6を「次期改善・開発中の承認フロー」として説明します。
+採用・ポートフォリオ用途では、まずmainを安定版として見せ、PR #6を「実機検証済みでmain統合待ちの承認フロー」として説明します。
 
 ---
 
@@ -34,8 +34,9 @@
 | 下書き画面での商品画像表示 | 実機検証済み |
 | Yahooオークション向けCSV生成 | 実装済み |
 | YahooオークションへのCSV実投入 | 未検証 |
-| Google Sheets承認フロー | PR #6で追加中 |
-| Review UI | PR #6で追加中 |
+| Google Sheets承認フロー | PR #6で実装・動作確認済み |
+| Review UI | PR #6で実装・Cloud Run稼働確認済み |
+| Review UI生成CSVのメルカリShops取込 | 実機検証済み |
 
 Yahooオークション側は、公開資料や面接では「Yahooオークション向けCSV生成機能」と表現します。「Yahooオークション出品まで実機検証済み」とは表現しません。
 
@@ -175,7 +176,7 @@ Review UIの `Generate CSV` で作る `exports/{batch_id}/approved/mercari_shops
 
 PR #6では、既存のGCS成果物を維持したまま、Google SheetsとReview UIを使った人間確認フローを追加しています。
 
-追加する主な要素:
+実装済みの主な要素:
 
 - `Draft_Mercari_List`: メルカリShops用CSVと同じヘッダーの下書き行
 - `Review_List`: 商品ごとの確認理由と `review_status`
@@ -188,7 +189,7 @@ Google Sheets同期が有効な場合、`mercari.csv`、`yahoo.csv`、`review_re
 
 承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで、Review UIまたは `export_approved_mercari_csv` から指定batchのCSVを再生成します。
 
-本番利用前には、Cloud Run IAP、サービスアカウント権限、Spreadsheet編集権限、Review UIの画像表示、CSV再投入を確認します。
+Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet編集、画像表示、CSV再投入は実機確認済みです。複数batchとリトライを含む運用耐性は継続して検証します。
 
 ---
 
@@ -245,6 +246,14 @@ PR #6のReview UI関連テスト:
 python -m pytest -p no:cacheprovider tests/test_review_ui.py tests/test_sheets_workflow.py
 ```
 
+標準テストは `110 passed`、重複したテストファイル名を含む全構成は `117 passed` です。10商品×2batch、同一イベント再実行、別batchのCSV分離も自動テストに含みます。
+
+運用計画と復旧手順:
+
+- [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- [`docs/operations_runbook.md`](docs/operations_runbook.md)
+- [`docs/user_action_checklist.md`](docs/user_action_checklist.md)
+
 ---
 
 ## 採用・面接での説明方針
@@ -252,7 +261,7 @@ python -m pytest -p no:cacheprovider tests/test_review_ui.py tests/test_sheets_w
 安全で正確な説明:
 
 ```text
-リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発しました。メルカリShopsへのCSVアップロード、下書き保存、画像表示までは実機検証済みです。現在はAI出力を人間が確認・承認できるよう、Google SheetsとReview UIを使った承認フローを開発中です。
+リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発しました。AI出力をReview UIで確認・修正・承認し、公式形式のCSVをメルカリShopsへアップロードできるところまで実機検証済みです。
 ```
 
 避ける表現:

@@ -1,5 +1,6 @@
 param(
-    [string]$ProjectId = "gen-lang-client-0122735738",
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectId,
     [string]$ClientId = "",
     [securestring]$ClientSecret
 )

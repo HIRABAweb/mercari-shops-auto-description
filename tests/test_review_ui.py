@@ -234,6 +234,7 @@ def test_batch_page_enables_export_when_item_is_approved(monkeypatch):
 
     assert response.status_code == 200
     assert b"Generate CSV" in response.data
+    assert "欠けた商品を復元" in response.data.decode("utf-8")
     assert b"1 / 1 approved" in response.data
     assert b"disabled" not in response.data
 

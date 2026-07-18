@@ -201,6 +201,25 @@ class MainCsvExportTest(unittest.TestCase):
             ):
                 self.module.get_model()
 
+    def test_prompt_gcs_read_failure_is_raised(self):
+        bucket = FakeBucket()
+        prompt = bucket.blob("prompts/listing.txt")
+        prompt.download_as_text = lambda encoding=None: (_ for _ in ()).throw(
+            RuntimeError("prompt read failed")
+        )
+        self.module.storage_client = FakeStorageClient(bucket)
+
+        with patch.dict(
+            os.environ,
+            {
+                "PROMPT_BUCKET_NAME": "prompt-bucket",
+                "PROMPT_FILE_NAME": "prompts/listing.txt",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "prompt read failed"):
+                self.module.get_prompt_from_gcs()
+
     def test_replaces_only_the_filename_suffix(self):
         self.assertEqual(
             self.module.replace_description_suffix(
@@ -355,6 +374,16 @@ class MainCsvExportTest(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("exported 2 approved Mercari rows", body)
+
+    def test_load_product_info_raises_gcs_read_failure(self):
+        bucket = FakeBucket()
+        source = bucket.blob("A0001/_SUCCESS.txt")
+        source.download_as_text = lambda encoding=None: (_ for _ in ()).throw(
+            RuntimeError("GCS read failed")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "GCS read failed"):
+            self.module.load_product_info(bucket, "A0001")
 
     def test_failure_keeps_source_and_releases_lock_for_retry(self):
         bucket = FakeBucket()
