@@ -21,22 +21,63 @@
     </dl>
   </section>
 
-  {% if image_previews %}
-    <section class="form-section">
-      <h2>Images</h2>
-      <div class="image-grid">
-        {% for image in image_previews %}
-          <figure class="image-preview">
-            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=image.index, v=image.cache_key) }}" alt="">
-            <figcaption>{{ image.header }}</figcaption>
-          </figure>
-        {% endfor %}
-      </div>
-    </section>
-  {% endif %}
-
   <form class="edit-form" method="post" action="{{ url_for('update_item', batch_id=batch_id, product_code=product_code) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <section class="form-section">
+      <h2>Images</h2>
+      {% if image_previews %}
+        <div class="image-grid image-sort-list" data-image-sort-list>
+          {% for image in image_previews %}
+            <figure class="image-preview" data-image-sort-row draggable="true">
+              <img
+                data-image-sort-thumb
+                src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=image.index, v=image.cache_key) }}"
+                alt=""
+                draggable="false"
+              >
+              <div class="image-preview-toolbar">
+                <button
+                  class="image-drag-handle"
+                  type="button"
+                  data-image-drag-handle
+                  aria-label="Drag image"
+                  title="Drag image"
+                >&#8942;&#8942;</button>
+                <div class="image-order-actions">
+                  <button class="icon-button" type="button" data-image-move-up aria-label="Move image up" title="Move image up">&#8593;</button>
+                  <button class="icon-button" type="button" data-image-move-down aria-label="Move image down" title="Move image down">&#8595;</button>
+                </div>
+              </div>
+              <details class="image-name-details">
+                <summary>Product image name</summary>
+                <figcaption>{{ image.header }}</figcaption>
+              </details>
+              <input
+                type="hidden"
+                name="{{ image.header }}"
+                value="{{ draft_row.get(image.header, '') }}"
+                data-image-sort-input
+              >
+            </figure>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-inline">No product images.</p>
+      {% endif %}
+
+      {% if unused_image_fields %}
+        <details class="unused-image-fields">
+          <summary>Unused product image names ({{ unused_image_fields|length }})</summary>
+          <div class="unused-image-field-list">
+            {% for header in unused_image_fields %}
+              <span>{{ header }}</span>
+              <input type="hidden" name="{{ header }}" value="">
+            {% endfor %}
+          </div>
+        </details>
+      {% endif %}
+    </section>
+
     <section class="form-section">
       <h2>Main Fields</h2>
       <div class="form-grid">
@@ -66,32 +107,6 @@
               {% endif %}
             </label>
           {% endif %}
-        {% endfor %}
-      </div>
-    </section>
-
-    <section class="form-section">
-      <h2>Image URLs</h2>
-      <div class="image-url-list" data-image-url-list>
-        {% for header in image_fields %}
-          <div class="image-url-row" data-image-url-row draggable="true">
-            <button class="image-drag-handle" type="button" data-image-drag-handle aria-label="Drag image">Drag</button>
-            <div class="image-url-thumb">
-              {% if draft_row.get(header, "") %}
-                <img data-image-url-thumb src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=loop.index, v=image_cache_key(draft_row.get(header, ''))) }}" alt="">
-              {% else %}
-                <img data-image-url-thumb src="" alt="" hidden>
-              {% endif %}
-            </div>
-            <label>
-              <span>{{ header }}</span>
-              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}" data-image-url-input>
-            </label>
-            <div class="image-url-actions">
-              <button class="button" type="button" data-image-move-up>Up</button>
-              <button class="button" type="button" data-image-move-down>Down</button>
-            </div>
-          </div>
         {% endfor %}
       </div>
     </section>
@@ -214,8 +229,8 @@
       });
     });
 
-    document.querySelectorAll("[data-image-url-list]").forEach((list) => {
-      const rows = Array.from(list.querySelectorAll("[data-image-url-row]"));
+    document.querySelectorAll("[data-image-sort-list]").forEach((list) => {
+      const rows = Array.from(list.querySelectorAll("[data-image-sort-row]"));
       let draggedIndex = null;
 
       const syncButtons = () => {
@@ -226,25 +241,31 @@
       };
 
       const rowState = (row) => {
-        const thumb = row.querySelector("[data-image-url-thumb]");
+        const thumb = row.querySelector("[data-image-sort-thumb]");
         return {
-          value: row.querySelector("[data-image-url-input]").value,
+          value: row.querySelector("[data-image-sort-input]").value,
           thumbSrc: thumb.getAttribute("src") || "",
-          thumbHidden: thumb.hidden,
         };
       };
 
       const applyRowState = (row, state) => {
-        const input = row.querySelector("[data-image-url-input]");
-        const thumb = row.querySelector("[data-image-url-thumb]");
+        const input = row.querySelector("[data-image-sort-input]");
+        const thumb = row.querySelector("[data-image-sort-thumb]");
         input.value = state.value;
         thumb.src = state.thumbSrc;
-        thumb.hidden = state.thumbHidden;
         input.dispatchEvent(new Event("input", { bubbles: true }));
       };
 
       const moveImageValue = (fromIndex, toIndex) => {
-        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) {
+        if (
+          !Number.isInteger(fromIndex)
+          || !Number.isInteger(toIndex)
+          || fromIndex === toIndex
+          || fromIndex < 0
+          || toIndex < 0
+          || fromIndex >= rows.length
+          || toIndex >= rows.length
+        ) {
           return;
         }
         const states = rows.map(rowState);
@@ -253,7 +274,18 @@
         rows.forEach((row, index) => applyRowState(row, states[index]));
       };
 
+      const clearDragStyles = () => {
+        rows.forEach((candidate) => {
+          candidate.classList.remove("image-preview--dragging");
+          candidate.classList.remove("image-preview--drop-target");
+        });
+      };
+
       rows.forEach((row, index) => {
+        const dragHandle = row.querySelector("[data-image-drag-handle]");
+        let pointerDraggedIndex = null;
+        let pointerTargetIndex = null;
+
         row.querySelector("[data-image-move-up]").addEventListener("click", () => {
           if (index > 0) {
             moveImageValue(index, index - 1);
@@ -266,30 +298,87 @@
         });
         row.addEventListener("dragstart", (event) => {
           draggedIndex = index;
-          row.classList.add("image-url-row--dragging");
+          row.classList.add("image-preview--dragging");
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", String(index));
         });
         row.addEventListener("dragover", (event) => {
+          if (!Number.isInteger(draggedIndex)) {
+            return;
+          }
           event.preventDefault();
           event.dataTransfer.dropEffect = "move";
-          row.classList.add("image-url-row--drop-target");
+          row.classList.add("image-preview--drop-target");
         });
         row.addEventListener("dragleave", () => {
-          row.classList.remove("image-url-row--drop-target");
+          row.classList.remove("image-preview--drop-target");
         });
         row.addEventListener("drop", (event) => {
+          if (!Number.isInteger(draggedIndex)) {
+            return;
+          }
           event.preventDefault();
-          const fromIndex = draggedIndex ?? Number(event.dataTransfer.getData("text/plain"));
-          moveImageValue(fromIndex, index);
-          rows.forEach((candidate) => candidate.classList.remove("image-url-row--drop-target"));
+          moveImageValue(draggedIndex, index);
+          rows.forEach((candidate) => candidate.classList.remove("image-preview--drop-target"));
         });
         row.addEventListener("dragend", () => {
           draggedIndex = null;
-          rows.forEach((candidate) => {
-            candidate.classList.remove("image-url-row--dragging");
-            candidate.classList.remove("image-url-row--drop-target");
+          clearDragStyles();
+        });
+
+        dragHandle.addEventListener("pointerdown", (event) => {
+          if (event.pointerType === "mouse" || event.button !== 0 || rows.length < 2) {
+            return;
+          }
+          event.preventDefault();
+          pointerDraggedIndex = index;
+          pointerTargetIndex = index;
+          row.classList.add("image-preview--dragging");
+          dragHandle.setPointerCapture(event.pointerId);
+        });
+        dragHandle.addEventListener("pointermove", (event) => {
+          if (!Number.isInteger(pointerDraggedIndex)) {
+            return;
+          }
+          event.preventDefault();
+          const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-image-sort-row]");
+          const targetIndex = rows.indexOf(target);
+          if (targetIndex < 0) {
+            return;
+          }
+          pointerTargetIndex = targetIndex;
+          rows.forEach((candidate, candidateIndex) => {
+            candidate.classList.toggle("image-preview--drop-target", candidateIndex === targetIndex);
           });
+        });
+
+        const finishPointerDrag = (event) => {
+          if (!Number.isInteger(pointerDraggedIndex)) {
+            return;
+          }
+          event.preventDefault();
+          moveImageValue(pointerDraggedIndex, pointerTargetIndex);
+          if (dragHandle.hasPointerCapture(event.pointerId)) {
+            dragHandle.releasePointerCapture(event.pointerId);
+          }
+          pointerDraggedIndex = null;
+          pointerTargetIndex = null;
+          clearDragStyles();
+        };
+        const cancelPointerDrag = (event) => {
+          if (dragHandle.hasPointerCapture(event.pointerId)) {
+            dragHandle.releasePointerCapture(event.pointerId);
+          }
+          pointerDraggedIndex = null;
+          pointerTargetIndex = null;
+          clearDragStyles();
+        };
+        dragHandle.addEventListener("pointerup", finishPointerDrag);
+        dragHandle.addEventListener("pointercancel", cancelPointerDrag);
+        dragHandle.addEventListener("lostpointercapture", () => {
+          pointerDraggedIndex = null;
+          pointerTargetIndex = null;
+          clearDragStyles();
         });
       });
 
