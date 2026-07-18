@@ -35,6 +35,7 @@ def load_main_module():
     FakeSecretClient.requests = []
     functions_framework = types.ModuleType("functions_framework")
     functions_framework.cloud_event = lambda function: function
+    functions_framework.http = lambda function: function
 
     google = types.ModuleType("google")
     google.__path__ = []
@@ -136,6 +137,12 @@ class FakeStorageClient:
         return [types.SimpleNamespace(name=f"{prefix}001.jpg")]
 
 
+class FakeRequest:
+    def __init__(self, args=None, method="POST"):
+        self.args = args or {}
+        self.method = method
+
+
 class MainCsvExportTest(unittest.TestCase):
     def setUp(self):
         self.module = load_main_module()
@@ -193,6 +200,25 @@ class MainCsvExportTest(unittest.TestCase):
                 "必須環境変数 GEMINI_MODEL が未設定",
             ):
                 self.module.get_model()
+
+    def test_prompt_gcs_read_failure_is_raised(self):
+        bucket = FakeBucket()
+        prompt = bucket.blob("prompts/listing.txt")
+        prompt.download_as_text = lambda encoding=None: (_ for _ in ()).throw(
+            RuntimeError("prompt read failed")
+        )
+        self.module.storage_client = FakeStorageClient(bucket)
+
+        with patch.dict(
+            os.environ,
+            {
+                "PROMPT_BUCKET_NAME": "prompt-bucket",
+                "PROMPT_FILE_NAME": "prompts/listing.txt",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "prompt read failed"):
+                self.module.get_prompt_from_gcs()
 
     def test_replaces_only_the_filename_suffix(self):
         self.assertEqual(
@@ -282,6 +308,82 @@ class MainCsvExportTest(unittest.TestCase):
         self.assertEqual(bucket.blobs[outputs["done"]].upload_calls[0][0], "done\n")
         result_json = bucket.blobs[outputs["result_json"]].upload_calls[0][0]
         self.assertEqual(json.loads(result_json)["outputs"], outputs)
+
+    def test_upload_export_artifacts_can_delay_done_marker(self):
+        bucket = FakeBucket()
+        context = self.module.build_export_context("A0001/item_description.txt")
+        result_payload = self.module.build_result_payload(
+            context=context,
+            category_id="456",
+            brand_id="123",
+            review_required=False,
+            processing_time=1.23456,
+            outputs={},
+        )
+
+        outputs = self.module.upload_export_artifacts(
+            bucket,
+            context,
+            {"蝠・刀蜷・": "蝠・刀蜷・"},
+            {"繧ｿ繧､繝医Ν": "蝠・刀蜷・"},
+            [],
+            result_payload,
+            write_done=False,
+        )
+
+        self.assertNotIn(outputs["done"], bucket.blobs)
+
+        self.module.upload_done_marker(bucket, outputs["done"])
+
+        self.assertEqual(bucket.blobs[outputs["done"]].upload_calls[0][0], "done\n")
+
+    def test_export_approved_mercari_csv_requires_batch_prefix(self):
+        body, status = self.module.export_approved_mercari_csv(FakeRequest())
+
+        self.assertEqual(status, 400)
+        self.assertIn("batch_prefix is required", body)
+
+    def test_export_approved_mercari_csv_rejects_get(self):
+        self.module.export_approved_mercari_rows = lambda batch_prefix: self.fail(
+            "GET must not rebuild approved CSV"
+        )
+
+        body, status = self.module.export_approved_mercari_csv(
+            FakeRequest(args={"batch_prefix": "exports/2026-07-06"}, method="GET")
+        )
+
+        self.assertEqual(status, 405)
+        self.assertIn("method not allowed", body)
+
+    def test_export_approved_mercari_csv_reports_unknown_batch(self):
+        self.module.export_approved_mercari_rows = lambda batch_prefix: -1
+
+        body, status = self.module.export_approved_mercari_csv(
+            FakeRequest(args={"batch_prefix": "exports/2026-07-06"})
+        )
+
+        self.assertEqual(status, 404)
+        self.assertIn("no review rows found", body)
+
+    def test_export_approved_mercari_csv_reports_export_count(self):
+        self.module.export_approved_mercari_rows = lambda batch_prefix: 2
+
+        body, status = self.module.export_approved_mercari_csv(
+            FakeRequest(args={"batch_prefix": "exports/2026-07-06"})
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn("exported 2 approved Mercari rows", body)
+
+    def test_load_product_info_raises_gcs_read_failure(self):
+        bucket = FakeBucket()
+        source = bucket.blob("A0001/_SUCCESS.txt")
+        source.download_as_text = lambda encoding=None: (_ for _ in ()).throw(
+            RuntimeError("GCS read failed")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "GCS read failed"):
+            self.module.load_product_info(bucket, "A0001")
 
     def test_failure_keeps_source_and_releases_lock_for_retry(self):
         bucket = FakeBucket()

@@ -22,7 +22,9 @@ from csv_export import (
     YAHOO_HEADERS,
     build_csv_text,
     build_export_rows,
+    build_mercari_csv_bytes,
     validate_mercari_headers,
+    validate_mercari_upload_rows,
 )
 
 
@@ -127,3 +129,62 @@ def test_validate_mercari_headers_rejects_missing_required_columns():
 
     with pytest.raises(RuntimeError, match="公式CSVテンプレート"):
         validate_mercari_headers(invalid_headers)
+
+
+def test_mercari_upload_csv_matches_official_utf8_bom_format():
+    row = {header: "" for header in MERCARI_HEADERS}
+    row.update({"商品名": "商品,名", "商品説明": "1行目\n2行目"})
+
+    csv_bytes = build_mercari_csv_bytes([row])
+    csv_text = csv_bytes.decode("utf-8-sig")
+    parsed_rows = list(csv.reader(io.StringIO(csv_text, newline="")))
+
+    assert csv_bytes.startswith(b"\xef\xbb\xbf")
+    assert b"\r\n" in csv_bytes
+    assert len(parsed_rows[0]) == 88
+    assert parsed_rows[0] == MERCARI_HEADERS
+    assert parsed_rows[1][MERCARI_HEADERS.index("商品名")] == "商品,名"
+    assert parsed_rows[1][MERCARI_HEADERS.index("商品説明")] == "1行目\n2行目"
+
+
+def test_mercari_upload_validation_reports_actionable_required_field_errors():
+    row = {header: "" for header in MERCARI_HEADERS}
+    row.update(
+        {
+            "商品名": "x" * 131,
+            "SKU1_在庫数": "1",
+            "SKU1_商品管理コード": "A0001",
+            "販売価格": "299",
+            "カテゴリID": "",
+            "商品の状態": "9",
+            "配送方法": "3",
+            "発送元の地域": "jp99",
+            "発送までの日数": "2",
+            "商品ステータス": "1",
+            "配送料の負担": "1",
+        }
+    )
+
+    issues = validate_mercari_upload_rows([row])
+    messages = [issue.display_message() for issue in issues]
+
+    assert any("商品画像名_1" in message for message in messages)
+    assert any("商品名" in message and "130文字" in message for message in messages)
+    assert any("販売価格" in message and "300" in message for message in messages)
+    assert any("カテゴリID" in message and "入力が必要" in message for message in messages)
+    assert any("商品の状態" in message for message in messages)
+    assert any("発送元の地域" in message for message in messages)
+
+
+def test_mercari_default_size_has_no_half_width_space():
+    rows = build_export_rows(
+        image_urls=["https://storage.googleapis.com/bucket/A0001/001.jpg"],
+        product_code="A0001",
+        title="商品名",
+        description="説明",
+        attributes=ProductAttributes(description="説明", item_type="Tシャツ", size=""),
+        brand_match=BrandMatch(brand_id="123", brand_name="Brand"),
+        category_match=CategoryMatch(category_id="456", category_name="Tシャツ"),
+    )
+
+    assert rows.mercari_row["SKU1_種類"] == "フリーサイズ"

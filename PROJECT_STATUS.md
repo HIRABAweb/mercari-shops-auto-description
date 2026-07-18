@@ -1,12 +1,12 @@
 # PROJECT_STATUS.md
 
-## 2026-07-10 更新: GitHub公開状態の整理
+## 2026-07-18 更新: PR #6実機検証完了・main統合準備
 
 ### 結論
 
-現時点では、mainを「安定版MVP」、PR #6を「最新開発中のReview UI / Google Sheets承認フロー」として扱います。
+mainは「安定版MVP」、PR #6は「Review UI / Google Sheets承認フローを追加するリリース候補」として扱います。
 
-PR #5は旧プロトタイプに近く、現時点では触りません。closeも行いません。
+PR #6のReview UIはCloud Runで稼働し、Googleログイン、商品表示、編集、画像並び替え、承認、公式88列CSV生成・ダウンロード、メルカリShopsへの実投入まで確認済みです。main統合前の最終レビューとGitHub整理を進めます。
 
 ---
 
@@ -42,7 +42,7 @@ PR #5は旧プロトタイプに近く、現時点では触りません。close�
 
 PR #6は、フロントエンドを含む最新開発ブランチとして扱います。
 
-### 追加中の内容
+### 追加内容
 
 - Google Sheets承認ワークフロー
 - `Draft_Mercari_List`
@@ -60,17 +60,58 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 採用向けには、次のように説明します。
 
 ```text
-安定版ではメルカリShops向けCSV生成と下書き保存まで実機検証済みです。現在は、AI生成結果を人間が確認・承認できるよう、Google SheetsとReview UIを使った承認フローをPR #6で開発中です。
+安定版ではメルカリShops向けCSV生成と下書き保存まで実機検証済みです。PR #6では、AI生成結果をGoogle SheetsとReview UIで確認・修正・承認し、公式CSVを生成するフローを実装・実機検証しました。
 ```
 
-### 本番前に確認すること
+---
 
-- Cloud Run IAPの動作
-- Review UIのサムネイル表示
-- サービスアカウントのGCS / Spreadsheet / CSV出力先への権限
-- `/healthz` の応答
-- `Approved_Mercari_CSV` から作ったCSVのメルカリShops投入
-- Save後に再承認が必要になる仕様
+## PR #6の実装状況
+
+### Google Sheets承認ワークフロー
+
+- `sheets_workflow.py` を追加し、Google Sheets承認ワークフローを既存CSV生成処理から分離
+- `SPREADSHEET_ID` が設定されている場合のみSheets同期を実行
+- 既存のCloud Storage成果物 `mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json`、`_DONE.txt` は維持
+- Sheets同期が有効な場合は、CSV/JSON出力とSheets同期が成功した後に `_DONE.txt` を作成
+- Draft/Yahooの冪等キーは先頭画像URL、Reviewの冪等キーは `batch_prefix/product_code`
+- `Approved_Mercari_CSV` は指定された `batch_prefix` の `approved` 商品だけから再生成
+
+### Review UI
+
+- `review-ui` にFlaskアプリ、テンプレート、CSS、Dockerfile、requirementsを追加
+- batch一覧、商品一覧、商品編集、商品承認、batch単位の承認済みCSV生成・ダウンロード画面を追加
+- 商品編集画面で画像プレビューを見ながら下書きCSV項目を修正できるようにした
+- 商品一覧と編集画面の画像表示はCloud Run経由のGCS画像プロキシを使う
+- batch詳細画面に承認済み件数を表示
+- 承認済み商品が0件の場合はアップロード用CSVを生成しない
+- 承認済み商品を `Save` のみで編集した場合は `needs_review` に戻し、再承認なしに最終CSVへ入らないようにした
+- Review UIにSheets/GCSへ触らない `/healthz` を追加
+- `export_approved_mercari_csv` HTTP entrypointはPOSTのみ再生成を許可
+- 最終CSVは公式88列・UTF-8 BOM付きで生成し、非公開GCS画像を7日間有効の署名付きURLへ変換
+- 公式必須項目や価格・文字数・配送コード・画像取得を生成前に検証し、違反時はCSV生成を停止
+
+---
+
+## 確認済み
+
+- Cloud RunのGoogleログインと許可ユーザー制限
+- runtime service accountのSpreadsheet / GCS / 署名権限
+- private bucketの商品画像表示
+- 商品編集、カテゴリ選択、画像並び替え、Save / Save & Approve
+- 承認済み商品だけの公式88列CSV生成
+- UTF-8 BOM、署名付き画像URLの未認証取得
+- メルカリShopsへのCSVアップロード成功
+- 標準自動テスト110件、重複構成を含む全117件成功
+- 10商品×2batchと同一イベント再実行の自動テスト成功
+- `_SUCCESS.txt`と管理プロンプトの読込・decode障害を例外停止へ統一
+- `状態メモ`、`状態`、`コンディション`、`特記事項`、`備考`、`注意点`を明示ラベルとして解析
+
+## 継続確認
+
+- 実データで異なる日付の10商品batchを2回処理して混在しないこと
+- 実環境のリトライ・途中失敗からの復旧で重複しないこと
+- Yahooオークション側へのCSV実投入
+- Artifact Registryの古いimage削除運用
 
 ---
 
@@ -80,7 +121,8 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 |---|---|---|
 | PR #4 | open | 入力仕様・生成品質改善候補。PR #6との整合確認後に判断する |
 | PR #5 | open / draft | 現時点では触らない。PR #6の旧プロトタイプ候補として保留する |
-| PR #6 | open / draft | 最新開発本線。Review UI / Google Sheets承認フローとして扱う |
+| PR #6 | open / draft | 実機検証済みのリリース候補。最終レビューとmain統合待ち |
+| PR #7 | merged | 公開向けGitHub整理としてmainへ反映済み |
 
 ---
 
@@ -89,7 +131,7 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 ### 書いてよい表現
 
 ```text
-リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発。メルカリShopsへのCSVアップロード、下書き保存、画像表示まで実機検証済み。現在はAI生成結果を人間が確認・承認できるReview UI / Google Sheets承認フローを開発中。
+リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発。AI生成結果をReview UIで確認・修正・承認し、公式CSVをメルカリShopsへアップロードできるところまで実機検証済み。
 ```
 
 ### 避ける表現
@@ -102,22 +144,31 @@ PR #6は、既存のGCS CSV/JSON出力を維持したまま、人間確認・承
 
 - Yahooオークションへの実投入は未検証
 - AI生成結果は人間確認前提
-- Review UI / Sheets承認フローはPR #6で開発中
+- Yahooオークション側は実投入未検証
 
 ---
 
 ## 直近のTODO
 
-1. READMEを採用担当者向けに整理する
-2. TASKS.mdを最新タスクに置き換える
-3. PR #6の本番前チェックを進める
-4. PR #4をPR #6とどう整合させるか判断する
-5. PR #5は現時点では触らない
-6. docs/evidenceのスクショに不要な内部情報が写っていないか確認する
+1. PR #6へmainを取り込み、最終テスト・レビューを行う
+2. PR #6へ最新変更をpushし、Draft解除可否を判断する
+3. 10商品×2batchの混在・リトライ試験を行う
+4. PR #4の未反映機能を精査する
+5. PR #6統合後に旧PR #5の終了を判断する
+6. Webアップロード画面など次段階の操作改善を進める
 
 ---
 
 ## 過去の主要マイルストーン
+
+### 2026-07-18: Review UI / 公式CSVの実機検証完了
+
+- Review UIをCloud Runで動かす構成を追加
+- Google Sheets承認フローを追加
+- Draft / Review / Approved / Yahoo の各シート連携を追加
+- Review UIから編集・承認・承認済みCSV生成を行う構成にした
+- 公式88列・UTF-8 BOM・署名付き画像URLのCSVを生成
+- メルカリShopsへの実際のCSVアップロードに成功
 
 ### 2026-07-01: PR #2最終確認と実機検証
 

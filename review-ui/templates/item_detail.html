@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}{{ product_code }}{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <h1>{{ draft_row.get(title_field) or product_code }}</h1>
+      <p>{{ product_code }} / {{ review_row.get("review_status") }}</p>
+    </div>
+    <div class="heading-actions">
+      <a class="button" href="{{ url_for('batch_detail', batch_id=batch_id) }}">Back</a>
+    </div>
+  </section>
+
+  <section class="review-panel">
+    <h2>Review</h2>
+    <dl>
+      <dt>Reason</dt>
+      <dd>{{ review_row.get("reason") or "None" }}</dd>
+      <dt>Action</dt>
+      <dd>{{ review_row.get("suggested_action") or "Check the draft fields as needed." }}</dd>
+    </dl>
+  </section>
+
+  {% if image_previews %}
+    <section class="form-section">
+      <h2>Images</h2>
+      <div class="image-grid">
+        {% for image in image_previews %}
+          <figure class="image-preview">
+            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=image.index, v=image.cache_key) }}" alt="">
+            <figcaption>{{ image.header }}</figcaption>
+          </figure>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  <form class="edit-form" method="post" action="{{ url_for('update_item', batch_id=batch_id, product_code=product_code) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <section class="form-section">
+      <h2>Main Fields</h2>
+      <div class="form-grid">
+        {% for header in primary_fields %}
+          {% if header == category_field %}
+            <div class="field">
+              <label for="category-id-input">{{ header }}</label>
+              <input id="category-id-input" name="{{ header }}" value="{{ draft_row.get(header, "") }}" data-category-id-input>
+              <div class="category-helper" data-category-helper data-search-url="{{ url_for('category_search_api') }}">
+                <div class="category-search-row">
+                  <input type="search" placeholder="例: メンズ Tシャツ" data-category-query>
+                  <button class="button" type="button" data-category-search>Search</button>
+                </div>
+                <p class="category-selected" data-category-selected></p>
+                <div class="category-results" data-category-results></div>
+              </div>
+            </div>
+          {% else %}
+            <label class="{{ 'field-wide' if header == description_field else '' }}">
+              <span>{{ header }}</span>
+              {% if header == description_field %}
+              <textarea name="{{ header }}" rows="10">{{ draft_row.get(header, "") }}</textarea>
+              {% elif header == price_field %}
+              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}" inputmode="numeric" pattern="[0-9]*" data-price-input>
+              {% else %}
+              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}">
+              {% endif %}
+            </label>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="form-section">
+      <h2>Image URLs</h2>
+      <div class="image-url-list" data-image-url-list>
+        {% for header in image_fields %}
+          <div class="image-url-row" data-image-url-row draggable="true">
+            <button class="image-drag-handle" type="button" data-image-drag-handle aria-label="Drag image">Drag</button>
+            <div class="image-url-thumb">
+              {% if draft_row.get(header, "") %}
+                <img data-image-url-thumb src="{{ url_for('item_image', batch_id=batch_id, product_code=product_code, image_index=loop.index, v=image_cache_key(draft_row.get(header, ''))) }}" alt="">
+              {% else %}
+                <img data-image-url-thumb src="" alt="" hidden>
+              {% endif %}
+            </div>
+            <label>
+              <span>{{ header }}</span>
+              <input name="{{ header }}" value="{{ draft_row.get(header, "") }}" data-image-url-input>
+            </label>
+            <div class="image-url-actions">
+              <button class="button" type="button" data-image-move-up>Up</button>
+              <button class="button" type="button" data-image-move-down>Down</button>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <details class="form-section">
+      <summary>Edit all CSV columns</summary>
+      <div class="form-grid">
+        {% for header in extra_fields %}
+          <label>
+            <span>{{ header }}</span>
+            <input name="{{ header }}" value="{{ draft_row.get(header, "") }}">
+          </label>
+        {% endfor %}
+      </div>
+    </details>
+
+    <div class="sticky-actions">
+      <button class="button" type="submit" name="action" value="save">Save</button>
+      <button class="button button--primary" type="submit" name="action" value="save_approve">Save &amp; Approve</button>
+    </div>
+  </form>
+  <script>
+    document.querySelectorAll("[data-price-input]").forEach((input) => {
+      const sanitize = () => {
+        input.value = input.value.replace(/[０-９]/g, (char) =>
+          String.fromCharCode(char.charCodeAt(0) - 0xFEE0)
+        ).replace(/[^0-9]/g, "");
+      };
+      input.addEventListener("input", sanitize);
+      input.addEventListener("change", sanitize);
+      sanitize();
+    });
+
+    document.querySelectorAll("[data-category-helper]").forEach((helper) => {
+      const field = helper.closest(".field");
+      const idInput = field.querySelector("[data-category-id-input]");
+      const queryInput = helper.querySelector("[data-category-query]");
+      const searchButton = helper.querySelector("[data-category-search]");
+      const results = helper.querySelector("[data-category-results]");
+      const selected = helper.querySelector("[data-category-selected]");
+      const searchUrl = helper.dataset.searchUrl;
+
+      const setMessage = (message) => {
+        results.replaceChildren();
+        const element = document.createElement("p");
+        element.className = "category-empty";
+        element.textContent = message;
+        results.appendChild(element);
+      };
+
+      const renderCategories = (categories) => {
+        results.replaceChildren();
+        if (!categories.length) {
+          setMessage("候補が見つかりませんでした。別の言葉で検索してください。");
+          return;
+        }
+        categories.forEach((category) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "category-option";
+          button.dataset.categoryOption = "true";
+          button.dataset.categoryId = category.category_id;
+          button.dataset.categoryLabel = category.full_name || category.category_name;
+          if (!category.all_terms_matched) {
+            button.classList.add("category-option--partial");
+          }
+
+          const name = document.createElement("span");
+          name.className = "category-option__name";
+          name.textContent = category.category_name;
+
+          const fullName = document.createElement("span");
+          fullName.className = "category-option__path";
+          fullName.textContent = category.full_name;
+
+          const id = document.createElement("code");
+          id.textContent = category.category_id;
+
+          button.append(name, fullName, id);
+          results.appendChild(button);
+        });
+      };
+
+      const search = async () => {
+        const query = queryInput.value.trim();
+        if (!query) {
+          setMessage("カテゴリ名を入力してください。");
+          return;
+        }
+        setMessage("検索中...");
+        try {
+          const response = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}`);
+          if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+          }
+          const data = await response.json();
+          renderCategories(data.categories || []);
+        } catch (error) {
+          setMessage("カテゴリ検索でエラーが発生しました。");
+        }
+      };
+
+      searchButton.addEventListener("click", search);
+      results.addEventListener("click", (event) => {
+        const option = event.target.closest("[data-category-option]");
+        if (!option) {
+          return;
+        }
+        idInput.value = option.dataset.categoryId || "";
+        idInput.dispatchEvent(new Event("input", { bubbles: true }));
+        idInput.dispatchEvent(new Event("change", { bubbles: true }));
+        queryInput.value = option.dataset.categoryLabel || "";
+        selected.textContent = `カテゴリIDに反映しました: ${idInput.value}`;
+      });
+      queryInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          search();
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-image-url-list]").forEach((list) => {
+      const rows = Array.from(list.querySelectorAll("[data-image-url-row]"));
+      let draggedIndex = null;
+
+      const syncButtons = () => {
+        rows.forEach((row, index) => {
+          row.querySelector("[data-image-move-up]").disabled = index === 0;
+          row.querySelector("[data-image-move-down]").disabled = index === rows.length - 1;
+        });
+      };
+
+      const rowState = (row) => {
+        const thumb = row.querySelector("[data-image-url-thumb]");
+        return {
+          value: row.querySelector("[data-image-url-input]").value,
+          thumbSrc: thumb.getAttribute("src") || "",
+          thumbHidden: thumb.hidden,
+        };
+      };
+
+      const applyRowState = (row, state) => {
+        const input = row.querySelector("[data-image-url-input]");
+        const thumb = row.querySelector("[data-image-url-thumb]");
+        input.value = state.value;
+        thumb.src = state.thumbSrc;
+        thumb.hidden = state.thumbHidden;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      const moveImageValue = (fromIndex, toIndex) => {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) {
+          return;
+        }
+        const states = rows.map(rowState);
+        const [moved] = states.splice(fromIndex, 1);
+        states.splice(toIndex, 0, moved);
+        rows.forEach((row, index) => applyRowState(row, states[index]));
+      };
+
+      rows.forEach((row, index) => {
+        row.querySelector("[data-image-move-up]").addEventListener("click", () => {
+          if (index > 0) {
+            moveImageValue(index, index - 1);
+          }
+        });
+        row.querySelector("[data-image-move-down]").addEventListener("click", () => {
+          if (index < rows.length - 1) {
+            moveImageValue(index, index + 1);
+          }
+        });
+        row.addEventListener("dragstart", (event) => {
+          draggedIndex = index;
+          row.classList.add("image-url-row--dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", String(index));
+        });
+        row.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          row.classList.add("image-url-row--drop-target");
+        });
+        row.addEventListener("dragleave", () => {
+          row.classList.remove("image-url-row--drop-target");
+        });
+        row.addEventListener("drop", (event) => {
+          event.preventDefault();
+          const fromIndex = draggedIndex ?? Number(event.dataTransfer.getData("text/plain"));
+          moveImageValue(fromIndex, index);
+          rows.forEach((candidate) => candidate.classList.remove("image-url-row--drop-target"));
+        });
+        row.addEventListener("dragend", () => {
+          draggedIndex = null;
+          rows.forEach((candidate) => {
+            candidate.classList.remove("image-url-row--dragging");
+            candidate.classList.remove("image-url-row--drop-target");
+          });
+        });
+      });
+
+      syncButtons();
+    });
+  </script>
+{% endblock %}

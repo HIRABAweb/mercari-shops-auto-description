@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Batches{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <h1>Batches</h1>
+      <p>Review generated listings by batch.</p>
+    </div>
+  </section>
+
+  <section class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Batch</th>
+          <th>Total</th>
+          <th>Approved</th>
+          <th>Open</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for batch in batches %}
+          <tr>
+            <td><code>{{ batch.batch_prefix }}</code></td>
+            <td>{{ batch.total_count }}</td>
+            <td>{{ batch.approved_count }}</td>
+            <td>
+              <span class="badge {{ 'badge--warn' if batch.needs_review_count else 'badge--ok' }}">
+                {{ batch.needs_review_count }}
+              </span>
+            </td>
+            <td class="actions">
+              <a class="button" href="{{ url_for('batch_detail', batch_id=batch.batch_id) }}">Open</a>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5" class="empty">No batches found.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

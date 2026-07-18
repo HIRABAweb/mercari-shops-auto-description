@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{{ batch_id }}{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <h1>{{ batch_id }}</h1>
+      <p><code>{{ batch_prefix }}</code></p>
+      <p>{{ approved_count }} / {{ total_count }} approved. CSV generation includes approved items only.</p>
+      {% if approved_count == 0 %}
+        <p class="hint">Save &amp; Approve at least one item before generating CSV.</p>
+      {% endif %}
+      {% if not approved_csv_available %}
+        <p class="hint">Download becomes available after Generate CSV succeeds.</p>
+      {% endif %}
+    </div>
+    <div class="heading-actions">
+      <form method="post" action="{{ url_for('repair_batch', batch_id=batch_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button
+          class="button"
+          type="submit"
+          title="処理済みデータからSheetsの欠けた商品を復元"
+          onclick="return confirm('商品が一覧から欠けている場合だけ実行します。復元しますか？')"
+        >欠けた商品を復元</button>
+      </form>
+      <form method="post" action="{{ url_for('export_batch', batch_id=batch_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="button button--primary" type="submit" {{ 'disabled' if approved_count == 0 else '' }}>Generate CSV</button>
+      </form>
+      {% if approved_csv_available %}
+        <a class="button" href="{{ url_for('download_batch', batch_id=batch_id) }}">Download CSV</a>
+      {% else %}
+        <span class="button button--disabled" aria-disabled="true">Download CSV</span>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="item-list">
+    {% for item in items %}
+      <article class="item-row">
+        <div class="thumb">
+          {% if item.first_image_url %}
+            <img src="{{ url_for('item_image', batch_id=batch_id, product_code=item.product_code, image_index=1, v=image_cache_key(item.first_image_url)) }}" alt="">
+          {% endif %}
+        </div>
+        <div class="item-main">
+          <div class="item-title">{{ item.title or item.product_code }}</div>
+          <div class="item-code">{{ item.product_code }}</div>
+          {% if item.reason %}
+            <div class="reason">{{ item.reason }}</div>
+          {% endif %}
+        </div>
+        <div>
+          <span class="badge {{ 'badge--ok' if item.review_status == 'approved' else 'badge--warn' }}">
+            {{ item.review_status }}
+          </span>
+        </div>
+        <div class="actions">
+          <a class="button" href="{{ url_for('item_detail', batch_id=batch_id, product_code=item.product_code) }}">Edit</a>
+        </div>
+      </article>
+    {% else %}
+      <div class="empty">No items found for this batch.</div>
+    {% endfor %}
+  </section>
+{% endblock %}

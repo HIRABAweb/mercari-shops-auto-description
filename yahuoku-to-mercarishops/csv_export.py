@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -129,6 +130,32 @@ YAHOO_HEADERS = [
 
 REVIEW_REQUIRED_HEADERS = ["商品管理コード", "確認項目", "候補1", "候補2", "理由"]
 
+MERCARI_TITLE_HEADER = "商品名"
+MERCARI_DESCRIPTION_HEADER = "商品説明"
+MERCARI_PRODUCT_CODE_HEADER = "SKU1_商品管理コード"
+MERCARI_STOCK_HEADER = "SKU1_在庫数"
+MERCARI_PRICE_HEADER = "販売価格"
+MERCARI_CATEGORY_HEADER = "カテゴリID"
+MERCARI_CONDITION_HEADER = "商品の状態"
+MERCARI_SHIPPING_METHOD_HEADER = "配送方法"
+MERCARI_SHIP_FROM_HEADER = "発送元の地域"
+MERCARI_SHIP_DAYS_HEADER = "発送までの日数"
+MERCARI_STATUS_HEADER = "商品ステータス"
+MERCARI_SHIPPING_PAYER_HEADER = "配送料の負担"
+MERCARI_SHIPPING_FEE_HEADER = "送料ID"
+MERCARI_BIZ_COOL_HEADER = "メルカリBiz配送_クール区分"
+
+
+@dataclass(frozen=True)
+class MercariValidationIssue:
+    product_code: str
+    field: str
+    message: str
+
+    def display_message(self) -> str:
+        code = self.product_code or "商品管理コードなし"
+        return f"{code} / {self.field}: {self.message}"
+
 
 def load_csv_headers(path: Path) -> list[str]:
     with path.open(encoding="utf-8-sig", newline="") as csv_file:
@@ -219,7 +246,7 @@ def build_mercari_row(
         row[f"商品画像名_{index}"] = image_url
     row["商品名"] = title
     row["商品説明"] = description
-    row["SKU1_種類"] = size or "one size"
+    row["SKU1_種類"] = size or "フリーサイズ"
     row["SKU1_在庫数"] = defaults.mercari_stock
     row["SKU1_商品管理コード"] = product_code
     row["ブランドID"] = brand_match.brand_id
@@ -348,3 +375,259 @@ def build_csv_text(headers: list[str], rows: list[dict[str, str]]) -> str:
     for row in rows:
         writer.writerow(row)
     return output.getvalue()
+
+
+def build_mercari_csv_bytes(rows: list[dict[str, str]]) -> bytes:
+    """Build a Mercari Shops upload CSV using the official UTF-8 BOM format."""
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        output,
+        fieldnames=MERCARI_HEADERS,
+        lineterminator="\r\n",
+        extrasaction="ignore",
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue().encode("utf-8-sig")
+
+
+def validate_mercari_upload_rows(
+    rows: list[dict[str, str]],
+) -> list[MercariValidationIssue]:
+    issues: list[MercariValidationIssue] = []
+    for row_number, row in enumerate(rows, start=1):
+        product_code = _clean(row.get(MERCARI_PRODUCT_CODE_HEADER))
+        item_label = product_code or f"row-{row_number}"
+
+        _require_image(row, item_label, issues)
+        _validate_text(
+            row,
+            item_label,
+            MERCARI_TITLE_HEADER,
+            issues,
+            required=True,
+            max_length=130,
+        )
+        _validate_text(
+            row,
+            item_label,
+            MERCARI_DESCRIPTION_HEADER,
+            issues,
+            max_length=3000,
+        )
+        _validate_product_code(product_code, item_label, issues)
+        _validate_integer(
+            row,
+            item_label,
+            MERCARI_STOCK_HEADER,
+            issues,
+            minimum=0,
+            required=True,
+        )
+        _validate_integer(
+            row,
+            item_label,
+            MERCARI_PRICE_HEADER,
+            issues,
+            minimum=300,
+            maximum=9_999_999,
+            required=True,
+        )
+        _validate_text(
+            row,
+            item_label,
+            MERCARI_CATEGORY_HEADER,
+            issues,
+            required=True,
+        )
+        _validate_choice(
+            row,
+            item_label,
+            MERCARI_CONDITION_HEADER,
+            issues,
+            set("123456"),
+        )
+        _validate_choice(
+            row,
+            item_label,
+            MERCARI_SHIPPING_METHOD_HEADER,
+            issues,
+            set("123456"),
+        )
+        _validate_pattern(
+            row,
+            item_label,
+            MERCARI_SHIP_FROM_HEADER,
+            issues,
+            r"jp(?:0[1-9]|[1-3][0-9]|4[0-7])",
+            "jp01～jp47の地域コードを指定してください",
+        )
+        _validate_choice(
+            row,
+            item_label,
+            MERCARI_SHIP_DAYS_HEADER,
+            issues,
+            set("12345"),
+        )
+        _validate_choice(
+            row,
+            item_label,
+            MERCARI_STATUS_HEADER,
+            issues,
+            set("12"),
+        )
+        _validate_choice(
+            row,
+            item_label,
+            MERCARI_SHIPPING_PAYER_HEADER,
+            issues,
+            set("12"),
+        )
+
+        if _clean(row.get(MERCARI_SHIPPING_PAYER_HEADER)) == "2":
+            _validate_text(
+                row,
+                item_label,
+                MERCARI_SHIPPING_FEE_HEADER,
+                issues,
+                required=True,
+            )
+        if _clean(row.get(MERCARI_SHIPPING_METHOD_HEADER)) == "6":
+            _validate_choice(
+                row,
+                item_label,
+                MERCARI_BIZ_COOL_HEADER,
+                issues,
+                set("123"),
+            )
+
+        for header in MERCARI_HEADERS:
+            if header in {MERCARI_TITLE_HEADER, MERCARI_DESCRIPTION_HEADER}:
+                continue
+            if " " in str(row.get(header, "")):
+                issues.append(
+                    MercariValidationIssue(
+                        item_label,
+                        header,
+                        "半角スペースを削除してください",
+                    )
+                )
+    return issues
+
+
+def _clean(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _require_image(
+    row: dict[str, str],
+    product_code: str,
+    issues: list[MercariValidationIssue],
+) -> None:
+    first_image = _clean(row.get("商品画像名_1"))
+    if not first_image:
+        issues.append(
+            MercariValidationIssue(
+                product_code,
+                "商品画像名_1",
+                "商品画像を1枚以上指定してください",
+            )
+        )
+
+
+def _validate_text(
+    row: dict[str, str],
+    product_code: str,
+    field_name: str,
+    issues: list[MercariValidationIssue],
+    *,
+    required: bool = False,
+    max_length: int | None = None,
+) -> None:
+    value = _clean(row.get(field_name))
+    if required and not value:
+        issues.append(MercariValidationIssue(product_code, field_name, "入力が必要です"))
+        return
+    if max_length is not None and len(value) > max_length:
+        issues.append(
+            MercariValidationIssue(
+                product_code,
+                field_name,
+                f"{max_length}文字以内にしてください（現在{len(value)}文字）",
+            )
+        )
+
+
+def _validate_product_code(
+    value: str,
+    product_code: str,
+    issues: list[MercariValidationIssue],
+) -> None:
+    if not value:
+        return
+    if len(value) > 50 or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        issues.append(
+            MercariValidationIssue(
+                product_code,
+                MERCARI_PRODUCT_CODE_HEADER,
+                "50文字以内の半角英数字・ハイフン・アンダーバーで入力してください",
+            )
+        )
+
+
+def _validate_integer(
+    row: dict[str, str],
+    product_code: str,
+    field_name: str,
+    issues: list[MercariValidationIssue],
+    *,
+    minimum: int,
+    maximum: int | None = None,
+    required: bool,
+) -> None:
+    value = _clean(row.get(field_name))
+    if not value:
+        if required:
+            issues.append(MercariValidationIssue(product_code, field_name, "入力が必要です"))
+        return
+    if not value.isascii() or not value.isdigit():
+        issues.append(MercariValidationIssue(product_code, field_name, "半角数字で入力してください"))
+        return
+    number = int(value)
+    if number < minimum or (maximum is not None and number > maximum):
+        if maximum is None:
+            message = f"{minimum}以上で入力してください"
+        else:
+            message = f"{minimum}～{maximum}の範囲で入力してください"
+        issues.append(MercariValidationIssue(product_code, field_name, message))
+
+
+def _validate_choice(
+    row: dict[str, str],
+    product_code: str,
+    field_name: str,
+    issues: list[MercariValidationIssue],
+    choices: set[str],
+) -> None:
+    value = _clean(row.get(field_name))
+    if value not in choices:
+        issues.append(
+            MercariValidationIssue(
+                product_code,
+                field_name,
+                f"{', '.join(sorted(choices))}のいずれかを指定してください",
+            )
+        )
+
+
+def _validate_pattern(
+    row: dict[str, str],
+    product_code: str,
+    field_name: str,
+    issues: list[MercariValidationIssue],
+    pattern: str,
+    message: str,
+) -> None:
+    value = _clean(row.get(field_name))
+    if not re.fullmatch(pattern, value):
+        issues.append(MercariValidationIssue(product_code, field_name, message))

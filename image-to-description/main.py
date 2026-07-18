@@ -96,17 +96,13 @@ def build_description_prompt(base_prompt: str, measurement_info: str) -> str:
 
 
 def load_measurement_info(bucket, object_name: str) -> tuple[str, bool]:
-    """Read measurements; allow a human-review marker when they are unavailable."""
-    try:
-        measurement_info = bucket.blob(object_name).download_as_text(encoding="utf-8")
-        if not measurement_info.strip():
-            print("WARNING: 採寸情報が空です。採寸情報なしで続行します。")
-            return "", False
-        print(f"INFO: 採寸情報を取得しました（文字数: {len(measurement_info)}）。")
-        return measurement_info, True
-    except Exception as error:
-        print(f"WARNING: 採寸情報の読み込みに失敗しました。採寸情報なしで続行します: {error}")
+    """Read product notes, distinguishing empty content from storage failures."""
+    measurement_info = bucket.blob(object_name).download_as_text(encoding="utf-8")
+    if not measurement_info.strip():
+        print("WARNING: 商品情報が空です。採寸情報なしで続行します。")
         return "", False
+    print(f"INFO: 商品情報を取得しました（文字数: {len(measurement_info)}）。")
+    return measurement_info, True
 
 
 def image_sort_key(blob) -> tuple[int, str]:

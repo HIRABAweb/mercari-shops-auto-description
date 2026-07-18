@@ -8,7 +8,7 @@
 
 現時点の安定版では、メルカリShopsへのCSVアップロード、下書き保存、下書き画面での商品画像表示まで実機検証済みです。Yahooオークション向けCSV生成機能も実装していますが、Yahooオークション側への実投入は未検証です。
 
-このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、現在はGoogle Sheets / Review UIを使った承認フローをPR #6で開発中です。
+このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、PR #6ではGoogle Sheets / Review UIを使った承認フローを追加しています。Review UIから編集・承認・公式CSV生成を行い、メルカリShopsへ実際に取り込めることまで確認済みです。
 
 ---
 
@@ -17,10 +17,10 @@
 | 区分 | 状態 | 補足 |
 |---|---|---|
 | main | 安定版MVP | GCS上にCSV/JSONを出力する構成 |
-| PR #6 | 最新開発ブランチ | Google Sheets承認フローとReview UIを追加中 |
+| PR #6 | リリース候補 | Google Sheets承認フローとReview UIを実装・実機検証済み。mainへの統合待ち |
 | PR #5 | 旧プロトタイプ | PR #6へ役割を移しているため、現時点では参照優先度を下げる |
 
-採用・ポートフォリオ用途では、まずmainを安定版として見せ、PR #6を「次期改善・開発中の承認フロー」として説明します。
+採用・ポートフォリオ用途では、まずmainを安定版として見せ、PR #6を「実機検証済みでmain統合待ちの承認フロー」として説明します。
 
 ---
 
@@ -34,8 +34,9 @@
 | 下書き画面での商品画像表示 | 実機検証済み |
 | Yahooオークション向けCSV生成 | 実装済み |
 | YahooオークションへのCSV実投入 | 未検証 |
-| Google Sheets承認フロー | PR #6で開発中 |
-| Review UI | PR #6で開発中 |
+| Google Sheets承認フロー | PR #6で実装・動作確認済み |
+| Review UI | PR #6で実装・Cloud Run稼働確認済み |
+| Review UI生成CSVのメルカリShops取込 | 実機検証済み |
 
 Yahooオークション側は、公開資料や面接では「Yahooオークション向けCSV生成機能」と表現します。「Yahooオークション出品まで実機検証済み」とは表現しません。
 
@@ -78,6 +79,8 @@ exports/
 
 `_DONE.txt` はCSVとJSONの生成が成功した場合のみ最後に作成します。
 
+PR #6でGoogle Sheets承認フローを有効にする場合も、既存のGCS成果物は維持します。
+
 ---
 
 ## 全体フロー
@@ -96,6 +99,9 @@ flowchart TD
     I --> K[result.json]
     J --> K
     K --> L[_DONE.txt]
+    H --> M[Google Sheets同期（PR #6 / 任意）]
+    M --> N[Review UIで確認・承認（PR #6）]
+    N --> O[Approved_Mercari_CSV / approved CSV]
 ```
 
 ---
@@ -120,20 +126,31 @@ flowchart TD
 - 低信頼度またはマスタ未一致の項目を `review_required.csv` へ出力
 - メルカリShops用CSVとYahooオークション用CSVを列名ベースで生成
 - 処理結果を `result.json` に保存
+- `SPREADSHEET_ID` が設定されている場合のみGoogle Sheetsへ同期する
+
+### review-ui（PR #6）
+
+PR #6では、Cloud Run上で動かすレビュー用フロントエンドを追加しています。
+
+Review UIでは、Google Sheets上の下書き行を確認・編集し、承認済みの行だけをメルカリShops投入用CSVとして再生成します。
 
 ---
 
 ## メルカリShopsの商品画像
 
-メルカリShops用CSVでは、`商品画像名_1` 〜 `商品画像名_20` にGCS公開画像URLを出力します。
+`Draft_Mercari_List` と商品単位の中間 `mercari.csv` では、`商品画像名_1` 〜 `商品画像名_20` に非公開GCS画像の参照URLを保持します。これらはReview UI内部で使う下書きデータであり、メルカリShopsへ直接アップロードする最終CSVではありません。
 
-この方式により、商品画像をメルカリShopsへ別途アップロードする二重作業を避けられます。ただし、CSV投入時にメルカリShops側から画像URLへアクセスできる必要があります。
+Review UIの `Generate CSV` で作る `exports/{batch_id}/approved/mercari_shops.csv` だけがアップロード用です。最終CSVでは、承認済み商品の画像をメルカリShopsが取得できる7日間有効の署名付きURLへ変換します。バケット自体は公開しません。
+
+最終CSVは公式テンプレートと同じ88列、UTF-8 BOM付きで出力します。商品画像、商品名、価格、カテゴリID、在庫、状態、配送項目などに公式仕様違反がある場合はCSVを生成せず、Review UIへ商品管理コードと修正項目を表示します。
 
 運用上の注意点:
 
-- 画像URLは、少なくともCSV投入と商品登録確認が終わるまでは削除しない
+- `Generate CSV` 後、7日以内にメルカリShopsへアップロードする
+- 7日を過ぎた場合は `Generate CSV` をもう一度実行してURLを更新する
+- 画像はCSV投入と商品登録確認が終わるまでGCSから削除しない
 - 画像ファイル名には日本語・空白・特殊記号を避ける
-- 画像順序はファイル名内の数字順で決まるため、`001.jpg`, `002.jpg` のような連番を推奨する
+- 最終的な画像順序はReview UIの商品編集画面で確認する
 - メルカリShops画像は最大20枚まで扱う
 
 ---
@@ -155,11 +172,11 @@ flowchart TD
 
 ---
 
-## PR #6: Google Sheets承認フロー / Review UI（開発中）
+## PR #6: Google Sheets承認フロー / Review UI
 
 PR #6では、既存のGCS成果物を維持したまま、Google SheetsとReview UIを使った人間確認フローを追加しています。
 
-追加予定・開発中の主な要素:
+実装済みの主な要素:
 
 - `Draft_Mercari_List`: メルカリShops用CSVと同じヘッダーの下書き行
 - `Review_List`: 商品ごとの確認理由と `review_status`
@@ -168,7 +185,11 @@ PR #6では、既存のGCS成果物を維持したまま、Google SheetsとRevie
 - `review-ui/`: Cloud Run上で動かすレビュー用フロントエンド
 - `export_approved_mercari_csv`: 承認済みCSVを再生成するHTTP entrypoint
 
-PR #6は最新の開発本線ですが、現時点ではdraftです。本番利用前には、Cloud Run IAP、サービスアカウント権限、Spreadsheet編集権限、Review UIの画像表示、CSV再投入を確認します。
+Google Sheets同期が有効な場合、`mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json` とSheets同期が成功した後に `_DONE.txt` を作成します。Sheets同期に失敗した場合は `_DONE.txt` を作らず、Cloud Functionsのリトライ対象にします。
+
+承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで、Review UIまたは `export_approved_mercari_csv` から指定batchのCSVを再生成します。
+
+Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet編集、画像表示、CSV再投入は実機確認済みです。複数batchとリトライを含む運用耐性は継続して検証します。
 
 ---
 
@@ -193,8 +214,13 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | yahuoku-to-mercarishops | `PROMPT_FILE_NAME` | 商品属性抽出用プロンプト |
 | yahuoku-to-mercarishops | `GEMINI_MODEL` | Gemini APIモデル |
 | yahuoku-to-mercarishops | `SPREADSHEET_ID` | PR #6のSheets承認フローを使う場合のみ設定 |
+| review-ui | `SPREADSHEET_ID` | Review UIが参照するSpreadsheet |
+| review-ui | `PRODUCT_BUCKET_NAME` | 商品画像・成果物を参照するGCS bucket |
+| review-ui | `MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL` | 最終CSVの画像URLへ署名するruntime service account |
+| review-ui | `MERCARI_IMAGE_SIGNED_URL_TTL_HOURS` | 署名付き画像URLの有効時間。既定値・最大値は168時間 |
+| review-ui | `FLASK_SECRET_KEY` | Flask session / CSRF用secret |
 
-`.env`、APIキー、実際のGCPプロジェクトID、実バケット名はGit管理しません。
+`.env`、APIキー、実際のGCPプロジェクトID、実バケット名、Spreadsheet ID、secret値はGit管理しません。
 
 ---
 
@@ -214,6 +240,20 @@ python -m pytest -q image-to-description/test_image_description.py
 python -m pytest -q tests image-to-description/test_image_description.py
 ```
 
+PR #6のReview UI関連テスト:
+
+```bash
+python -m pytest -p no:cacheprovider tests/test_review_ui.py tests/test_sheets_workflow.py
+```
+
+標準テストは `110 passed`、重複したテストファイル名を含む全構成は `117 passed` です。10商品×2batch、同一イベント再実行、別batchのCSV分離も自動テストに含みます。
+
+運用計画と復旧手順:
+
+- [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- [`docs/operations_runbook.md`](docs/operations_runbook.md)
+- [`docs/user_action_checklist.md`](docs/user_action_checklist.md)
+
 ---
 
 ## 採用・面接での説明方針
@@ -221,7 +261,7 @@ python -m pytest -q tests image-to-description/test_image_description.py
 安全で正確な説明:
 
 ```text
-リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発しました。メルカリShopsへのCSVアップロード、下書き保存、画像表示までは実機検証済みです。現在はAI出力を人間が確認・承認できるよう、Google SheetsとReview UIを使った承認フローを開発中です。
+リユース事業の出品作業を効率化するため、商品画像と採寸・状態メモからメルカリShops向けCSVを生成するMVPを開発しました。AI出力をReview UIで確認・修正・承認し、公式形式のCSVをメルカリShopsへアップロードできるところまで実機検証済みです。
 ```
 
 避ける表現:
