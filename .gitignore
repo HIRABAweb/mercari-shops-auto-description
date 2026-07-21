@@ -4,3 +4,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Workspace-local assets that are outside this repository
+/.codex-remote-attachments/
+/codex-apparel-retouch-agent/
+/codex-apparel-retouch-agent.zip
+/portfolio/

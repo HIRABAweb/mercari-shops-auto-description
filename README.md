@@ -8,7 +8,7 @@
 
 現時点の安定版では、メルカリShopsへのCSVアップロード、下書き保存、下書き画面での商品画像表示まで実機検証済みです。Yahooオークション向けCSV生成機能も実装していますが、Yahooオークション側への実投入は未検証です。
 
-このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、PR #6ではGoogle Sheets / Review UIを使った承認フローを追加しています。Review UIから編集・承認・公式CSV生成を行い、メルカリShopsへ実際に取り込めることまで確認済みです。
+このリポジトリは完成SaaSではなく、実務課題を起点に開発したMVP・ポートフォリオです。AI生成結果は人間確認を前提にしており、Google Sheets / Review UIを使った承認フローを備えています。Review UIから編集・承認・公式CSV生成を行い、メルカリShopsへ実際に取り込めることまで確認済みです。
 
 ---
 
@@ -16,11 +16,11 @@
 
 | 区分 | 状態 | 補足 |
 |---|---|---|
-| main | 安定版MVP | GCS上にCSV/JSONを出力する構成 |
-| PR #6 | リリース候補 | Google Sheets承認フローとReview UIを実装・実機検証済み。mainへの統合待ち |
-| PR #5 | 旧プロトタイプ | PR #6へ役割を移しているため、現時点では参照優先度を下げる |
+| ローカル `main` | 承認フローを含む安定版MVP | GCS成果物、Google Sheets同期、Review UI、公式CSV生成を含むことをGit履歴で確認済み |
+| 作業ブランチ | `main` 後の変更を含む場合がある | 現在の差分と検証結果は `git status`、`git log`、共通検証で確認する |
+| 稼働中サービス | 現在版との一致は要確認 | 2026-07-18までの実機検証記録はあるが、この文書更新ではGCPへ接続していない |
 
-採用・ポートフォリオ用途では、まずmainを安定版として見せ、PR #6を「実機検証済みでmain統合待ちの承認フロー」として説明します。
+一時的なPR番号やブランチ状態ではなく、`main` のGit履歴、CI、最新のローカル検証結果を現在状態の根拠にします。
 
 ---
 
@@ -34,8 +34,8 @@
 | 下書き画面での商品画像表示 | 実機検証済み |
 | Yahooオークション向けCSV生成 | 実装済み |
 | YahooオークションへのCSV実投入 | 未検証 |
-| Google Sheets承認フロー | PR #6で実装・動作確認済み |
-| Review UI | PR #6で実装・Cloud Run稼働確認済み |
+| Google Sheets承認フロー | mainに実装済み・過去の動作確認記録あり |
+| Review UI | mainに実装済み・過去のCloud Run稼働確認記録あり |
 | Review UI生成CSVのメルカリShops取込 | 実機検証済み |
 
 Yahooオークション側は、公開資料や面接では「Yahooオークション向けCSV生成機能」と表現します。「Yahooオークション出品まで実機検証済み」とは表現しません。
@@ -65,7 +65,7 @@ products/
 
 ## 出力物
 
-安定版のmainでは、Cloud Storage上に以下の成果物を出力します。
+mainでは、Cloud Storage上に以下の成果物を出力します。
 
 ```text
 exports/
@@ -79,7 +79,7 @@ exports/
 
 `_DONE.txt` はCSVとJSONの生成が成功した場合のみ最後に作成します。
 
-PR #6でGoogle Sheets承認フローを有効にする場合も、既存のGCS成果物は維持します。
+Google Sheets承認フローを有効にする場合も、既存のGCS成果物は維持します。
 
 ---
 
@@ -99,8 +99,8 @@ flowchart TD
     I --> K[result.json]
     J --> K
     K --> L[_DONE.txt]
-    H --> M[Google Sheets同期（PR #6 / 任意）]
-    M --> N[Review UIで確認・承認（PR #6）]
+    H --> M[Google Sheets同期（任意）]
+    M --> N[Review UIで確認・承認]
     N --> O[Approved_Mercari_CSV / approved CSV]
 ```
 
@@ -128,9 +128,9 @@ flowchart TD
 - 処理結果を `result.json` に保存
 - `SPREADSHEET_ID` が設定されている場合のみGoogle Sheetsへ同期する
 
-### review-ui（PR #6）
+### review-ui
 
-PR #6では、Cloud Run上で動かすレビュー用フロントエンドを追加しています。
+Cloud Run上で動かすレビュー用フロントエンドです。
 
 Review UIでは、Google Sheets上の下書き行を確認・編集し、承認済みの行だけをメルカリShops投入用CSVとして再生成します。
 
@@ -172,9 +172,9 @@ Review UIの `Generate CSV` で作る `exports/{batch_id}/approved/mercari_shops
 
 ---
 
-## PR #6: Google Sheets承認フロー / Review UI
+## Google Sheets承認フロー / Review UI
 
-PR #6では、既存のGCS成果物を維持したまま、Google SheetsとReview UIを使った人間確認フローを追加しています。
+既存のGCS成果物を維持したまま、Google SheetsとReview UIを使った人間確認フローを提供します。
 
 実装済みの主な要素:
 
@@ -189,15 +189,19 @@ Google Sheets同期が有効な場合、`mercari.csv`、`yahoo.csv`、`review_re
 
 承認済みCSVを作るときは、`Review_List.review_status` を `approved` にしたうえで、Review UIまたは `export_approved_mercari_csv` から指定batchのCSVを再生成します。
 
-Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet編集、画像表示、CSV再投入は実機確認済みです。複数batchとリトライを含む運用耐性は継続して検証します。
+2026-07-18までの記録では、Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet編集、画像表示、CSV再投入を実機確認済みです。この文書更新では現行Revisionを再確認していません。複数batchとリトライを含む運用耐性は継続して検証します。
 
 ---
 
-## Google Cloud Run Functionsへのデプロイ方針
+## Google Cloudの設定・デプロイ境界
 
 このリポジトリには、実際のGoogle CloudプロジェクトID、バケット名、シークレット名、APIキー本体は含めません。環境ごとに異なる値はCloud Run Functionsの環境変数として設定します。
 
 APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはSecret Managerのシークレット名だけを渡します。
+
+アプリケーションデプロイと、API・IAM・IAP・Secret・サービスアカウント・bucketなどの初期設定/管理は分離します。AIエージェントがCloud Runをデプロイできるのは、許可対象、完全なコマンド、検証結果、トラフィック、ロールバックを提示し、人間がその1回を明示承認した場合だけです。高権限なインフラ管理はAIから常に実行禁止です。
+
+既存の `scripts/deploy_review_ui.ps1` はアプリ配備と高権限な初期設定を混在させているため、AIエージェントの実行対象ではありません。詳細と将来のアプリ専用デプロイスクリプト設計は [`docs/deployment-safety.md`](docs/deployment-safety.md)、常設ルールは [`AGENTS.md`](AGENTS.md) を参照してください。
 
 代表的な環境変数:
 
@@ -213,7 +217,7 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 | yahuoku-to-mercarishops | `PROMPT_BUCKET_NAME` | プロンプトファイルを置くGCSバケット |
 | yahuoku-to-mercarishops | `PROMPT_FILE_NAME` | 商品属性抽出用プロンプト |
 | yahuoku-to-mercarishops | `GEMINI_MODEL` | Gemini APIモデル |
-| yahuoku-to-mercarishops | `SPREADSHEET_ID` | PR #6のSheets承認フローを使う場合のみ設定 |
+| yahuoku-to-mercarishops | `SPREADSHEET_ID` | Sheets承認フローを使う場合のみ設定 |
 | review-ui | `SPREADSHEET_ID` | Review UIが参照するSpreadsheet |
 | review-ui | `PRODUCT_BUCKET_NAME` | 商品画像・成果物を参照するGCS bucket |
 | review-ui | `MERCARI_SIGNING_SERVICE_ACCOUNT_EMAIL` | 最終CSVの画像URLへ署名するruntime service account |
@@ -226,33 +230,52 @@ APIキー本体はSecret Managerへ保存し、`yahuoku-to-mercarishops` にはS
 
 ## テスト
 
+開発・テスト依存関係:
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
+人間、AIエージェント、CIで共有する全検証:
+
+```bash
+python scripts/check.py
+```
+
+Windows PowerShellでは薄いラッパーも利用できます。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
+```
+
 通常のテスト:
 
 ```bash
 python -m pytest -p no:cacheprovider tests
 ```
 
-重複したテストファイル名を含む検証:
+コンポーネントローカルのテストを含む全テスト:
 
 ```bash
-python -m pytest -q tests
-python -m pytest -q image-to-description/test_image_description.py
-python -m pytest -q tests image-to-description/test_image_description.py
+python -m pytest -q -p no:cacheprovider tests image-to-description/test_image_description.py
 ```
 
-PR #6のReview UI関連テスト:
+Review UI関連テスト:
 
 ```bash
 python -m pytest -p no:cacheprovider tests/test_review_ui.py tests/test_sheets_workflow.py
 ```
 
-標準テストは `110 passed`、重複したテストファイル名を含む全構成は `117 passed` です。10商品×2batch、同一イベント再実行、別batchのCSV分離も自動テストに含みます。
+変動しやすいテスト件数は固定せず、CIまたは最新の `python scripts/check.py` の結果を参照します。10商品×2batch、同一イベント再実行、別batchのCSV分離も自動テストに含みます。
 
 運用計画と復旧手順:
 
 - [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - [`docs/operations_runbook.md`](docs/operations_runbook.md)
 - [`docs/user_action_checklist.md`](docs/user_action_checklist.md)
+- [`docs/deployment-safety.md`](docs/deployment-safety.md)
+- [`docs/plans/TEMPLATE.md`](docs/plans/TEMPLATE.md)
+- AIエージェントの常設ルール: [`AGENTS.md`](AGENTS.md)
 
 ---
 
