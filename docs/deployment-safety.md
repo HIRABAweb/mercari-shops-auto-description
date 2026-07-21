@@ -2,7 +2,7 @@
 
 ## Purpose and boundary
 
-This document defines a future application-only Cloud Run deployment path. It does not authorize a deployment and contains no production identifiers or secrets.
+This document defines a future application-only Cloud Run deployment path. It does not authorize a deployment and contains no production identifiers or secrets. Codex execution rules are defined only in the root `AGENTS.md`; this human-facing design provides context and must not duplicate, grant, or override permission.
 
 Deployment must be split into two independent workflows:
 

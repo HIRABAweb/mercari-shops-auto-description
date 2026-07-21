@@ -44,7 +44,7 @@
 
 ## AI開発基盤
 
-- [x] ルート `AGENTS.md` を正本とし、`CLAUDE.md` / `CODEX.md` を短い入口にする
+- [x] Codex向け実行ルールをルート `AGENTS.md` へ一元化する
 - [x] 人間・AI・CI共通の `python scripts/check.py` を追加する
 - [x] Pull Requestとmain pushのCI品質ゲートを追加する
 - [x] Issue、PR、Execution Planの受け入れ条件を標準化する

@@ -207,7 +207,7 @@ Google Sheets上の下書き行を確認・編集し、承認済みの行だけ�
 
 ## AI開発と共通検証
 
-AIエージェント向け指示の正本は[`AGENTS.md`](AGENTS.md)です。Claude Codeは[`CLAUDE.md`](CLAUDE.md)、Codexは[`CODEX.md`](CODEX.md)を短い入口として使用します。
+Codexが自動参照するAI向け実行ルールの唯一の正本は[`AGENTS.md`](AGENTS.md)です。安全制約、変更ルール、検証手順、デプロイ承認条件は`AGENTS.md`で一元管理し、他のAI向け指示ファイルへ重複させません。
 
 人間、AIエージェント、CIは、外部サービスへ接続しない同一の共通検証を使用します。
 
@@ -243,13 +243,11 @@ python -m pytest -q -p no:cacheprovider tests image-to-description/test_image_de
 
 ## Google Cloudの設定・デプロイ境界
 
-Cloud Runのアプリケーションデプロイと、IAM・IAP・Secret・API・Project・bucketなどのインフラ初期設定・管理は分離します。インフラ管理操作はAIエージェントから常に実行禁止です。
-
-未承認のCloud Runデプロイは禁止です。アプリケーションデプロイは、[`AGENTS.md`](AGENTS.md)に定めた対象・コマンド・検証結果・トラフィック・ロールバックを提示し、人間がその1回を明示承認した場合だけ実行できます。
+Codexが必ず守る操作区分、禁止事項、Cloud Runデプロイ承認条件は[`AGENTS.md`](AGENTS.md)だけで管理します。設計理由と将来のアプリケーション専用デプロイ案は[`docs/deployment-safety.md`](docs/deployment-safety.md)を参照してください。
 
 許可Project、リージョン、Cloud Runサービスの一覧は未設定です。この一覧が人間により確認されるまで、AIエージェントが実行可能なCloud Runデプロイはありません。現行のCloud Run Revisionと`main`の一致も未確認です。
 
-既存の`scripts/deploy_review_ui.ps1`はアプリ配備と高権限な初期設定を混在させているため、AIエージェントの実行対象ではありません。詳細は[`docs/deployment-safety.md`](docs/deployment-safety.md)を参照してください。
+既存の`scripts/deploy_review_ui.ps1`はアプリ配備と高権限な初期設定を混在させており、将来のアプリケーション専用デプロイ経路として承認されていません。
 
 ## 制約・未検証事項
 

@@ -1,6 +1,6 @@
 # AI development instructions
 
-This file is the authoritative instruction source for AI agents working in this repository. Read it before inspecting or changing files. `CLAUDE.md` and `CODEX.md` are entry points only; if they differ from this file, stop and ask a human.
+This file is the sole authoritative execution-rule source for Codex in this repository. Codex must read and follow it before inspecting or changing files. Mandatory safety constraints, change rules, verification steps, and deployment approval conditions belong here and must not be duplicated in another AI instruction file. Human-facing documentation may explain workflows but never overrides this file.
 
 ## Project overview
 
