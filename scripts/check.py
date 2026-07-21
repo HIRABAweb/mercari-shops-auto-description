@@ -116,8 +116,8 @@ def main() -> int:
         "Staged whitespace", ["git", "diff", "--cached", "--check"], env=env
     )
     run_command(
-        "HEAD commit whitespace",
-        ["git", "show", "--check", "--format=", "HEAD"],
+        "HEAD delta whitespace",
+        ["git", "diff", "--check", "HEAD^", "HEAD"],
         env=env,
     )
 
