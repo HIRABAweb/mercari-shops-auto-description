@@ -184,6 +184,12 @@ def create_app() -> Flask:
             for header in MERCARI_HEADERS
             if header not in PRIMARY_FIELDS and header not in IMAGE_FIELDS
         ]
+        image_previews = image_previews_from_draft_row(draft_row)
+        unused_image_fields = [
+            header
+            for header in IMAGE_FIELDS
+            if not draft_row.get(header, "").strip()
+        ]
         return render_template(
             "item_detail.html",
             batch_id=batch_id,
@@ -192,7 +198,8 @@ def create_app() -> Flask:
             draft_row=draft_row,
             primary_fields=PRIMARY_FIELDS,
             image_fields=IMAGE_FIELDS,
-            image_previews=image_previews_from_draft_row(draft_row),
+            image_previews=image_previews,
+            unused_image_fields=unused_image_fields,
             extra_fields=extra_fields,
             title_field=TITLE_FIELD,
             description_field=DESCRIPTION_FIELD,

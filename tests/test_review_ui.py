@@ -153,11 +153,10 @@ def test_item_page_renders_main_fields(monkeypatch):
     assert b"data-category-helper" in response.data
     assert 'name="カテゴリID"'.encode() in response.data
     assert 'name="販売価格" value="" data-category-id-input'.encode() not in response.data
-    assert b"data-image-url-row" in response.data
-    assert b'draggable="true"' in response.data
-    assert b"data-image-drag-handle" in response.data
-    assert b"data-image-move-up" in response.data
-    assert b"data-image-move-down" in response.data
+    assert b"Image URLs" not in response.data
+    assert b"Unused product image names (20)" in response.data
+    for header in module.IMAGE_FIELDS:
+        assert response.data.count(f'name="{header}"'.encode()) == 1
     assert b"data-price-input" in response.data
 
 
@@ -186,6 +185,22 @@ def test_item_page_renders_image_previews_through_proxy(monkeypatch):
 
     assert response.status_code == 200
     assert b"Images" in response.data
+    assert b"Image URLs" not in response.data
+    assert response.data.count(
+        b'<figure class="image-preview" data-image-sort-row draggable="true">'
+    ) == 2
+    assert response.data.count(b'draggable="true"') == 2
+    assert b"data-image-sort-input" in response.data
+    assert b"data-image-drag-handle" in response.data
+    assert b"data-image-move-up" in response.data
+    assert b"data-image-move-down" in response.data
+    assert b'addEventListener("pointerdown"' in response.data
+    assert b'addEventListener("pointermove"' in response.data
+    assert b"Product image name" in response.data
+    assert b"Unused product image names (18)" in response.data
+    assert b"data-image-url-input" not in response.data
+    for header in module.IMAGE_FIELDS:
+        assert response.data.count(f'name="{header}"'.encode()) == 1
     assert b'<img src="https://storage.googleapis.com' not in response.data
     assert b"/batches/2026-07-07/items/A0001/images/1" in response.data
     assert b"/batches/2026-07-07/items/A0001/images/2" in response.data
@@ -855,6 +870,52 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
     assert calls[0][1][2][module.TITLE_FIELD] == "Updated title"
     assert calls[0][1][2][module.PRICE_FIELD] == "12345"
     assert calls[1][1] == ("2026-07-07",)
+
+
+def test_save_preserves_reordered_hidden_image_fields(monkeypatch):
+    module = load_review_ui_module()
+    client = module.app.test_client()
+    saved_updates = []
+    monkeypatch.setattr(
+        module,
+        "update_draft_item",
+        lambda batch_id, product_code, updates: saved_updates.append(updates),
+    )
+    monkeypatch.setattr(module, "delete_approved_csv_if_exists", lambda batch_id: None)
+    monkeypatch.setattr(
+        module,
+        "mark_review_item_needs_review",
+        lambda batch_id, product_code: None,
+    )
+    image_values = {
+        header: f"https://storage.googleapis.com/product-images/{index}.jpg"
+        if index <= 2
+        else ""
+        for index, header in enumerate(module.IMAGE_FIELDS, start=1)
+    }
+    first_header, second_header = module.IMAGE_FIELDS[:2]
+    image_values[first_header], image_values[second_header] = (
+        image_values[second_header],
+        image_values[first_header],
+    )
+
+    response = client.post(
+        "/batches/2026-07-07/items/A0001",
+        data={
+            "csrf_token": csrf_from_session(client),
+            "action": "save",
+            **image_values,
+        },
+    )
+
+    assert response.status_code == 302
+    assert len(saved_updates) == 1
+    assert saved_updates[0][first_header].endswith("/2.jpg")
+    assert saved_updates[0][second_header].endswith("/1.jpg")
+    assert all(header in saved_updates[0] for header in module.IMAGE_FIELDS)
+    csv_row = module.dict_row_to_list(module.MERCARI_HEADERS, saved_updates[0])
+    assert csv_row[0].endswith("/2.jpg")
+    assert csv_row[1].endswith("/1.jpg")
 
 
 def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
