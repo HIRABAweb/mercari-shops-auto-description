@@ -193,7 +193,7 @@ Google Sheets上の下書き行を確認・編集し、承認済みの行だけ�
 | `Approved_Mercari_CSV` | 承認済み商品の最終CSV用データ |
 | `Yahoo_List` | Yahooオークション向けCSV行 |
 
-Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet編集、商品画像表示、承認済みCSVのメルカリShops再投入まで実機確認済みです。
+2026-07-18までの記録では、Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet編集、商品画像表示、承認済みCSVのメルカリShops再投入まで実機確認済みです。現行のCloud Run Revisionと現在の`main`が一致しているかは未確認です。
 
 複数batchや障害時の再実行を含む運用耐性は継続して検証しています。
 
@@ -205,25 +205,51 @@ Cloud RunのGoogleログイン、サービスアカウント権限、Spreadsheet
 - 最終CSV生成時だけ期限付き署名URLを発行
 - Cloud RunのReview UIはGoogleログインを前提にする
 
-## テスト
+## AI開発と共通検証
 
-通常のテスト:
+AIエージェント向け指示の正本は[`AGENTS.md`](AGENTS.md)です。Claude Codeは[`CLAUDE.md`](CLAUDE.md)、Codexは[`CODEX.md`](CODEX.md)を短い入口として使用します。
+
+人間、AIエージェント、CIは、外部サービスへ接続しない同一の共通検証を使用します。
+
+```bash
+python scripts/check.py
+```
+
+Windows PowerShellでは次のラッパーを使用できます。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
+```
+
+PowerShell 7（`pwsh`）がインストールされている環境では、次の短い形式も使用できます。
+
+```powershell
+pwsh scripts/check.ps1
+```
+
+共通検証は、tracked Pythonファイルの構文、全テスト、依存関係の整合性、Git差分の空白を確認します。変動するテスト件数は文書へ固定せず、共通検証または最新のCI結果を参照してください。
+
+個別に標準テストだけを実行する場合:
 
 ```bash
 python -m pytest -p no:cacheprovider tests
 ```
 
-重複したテストファイル名を含む検証:
+コンポーネントローカルのテストを含む全テスト:
 
 ```bash
-python -m pytest -q tests
-python -m pytest -q image-to-description/test_image_description.py
-python -m pytest -q tests image-to-description/test_image_description.py
+python -m pytest -q -p no:cacheprovider tests image-to-description/test_image_description.py
 ```
 
-現在のmainでは、標準テストは `110 passed`、重複したテストファイル名を含む全構成は `117 passed` です。
+## Google Cloudの設定・デプロイ境界
 
-テストには、10商品×2batch、同一イベントの再実行、別batchのCSV分離、Google Sheets同期、Review UIの主要処理を含みます。
+Cloud Runのアプリケーションデプロイと、IAM・IAP・Secret・API・Project・bucketなどのインフラ初期設定・管理は分離します。インフラ管理操作はAIエージェントから常に実行禁止です。
+
+未承認のCloud Runデプロイは禁止です。アプリケーションデプロイは、[`AGENTS.md`](AGENTS.md)に定めた対象・コマンド・検証結果・トラフィック・ロールバックを提示し、人間がその1回を明示承認した場合だけ実行できます。
+
+許可Project、リージョン、Cloud Runサービスの一覧は未設定です。この一覧が人間により確認されるまで、AIエージェントが実行可能なCloud Runデプロイはありません。現行のCloud Run Revisionと`main`の一致も未確認です。
+
+既存の`scripts/deploy_review_ui.ps1`はアプリ配備と高権限な初期設定を混在させているため、AIエージェントの実行対象ではありません。詳細は[`docs/deployment-safety.md`](docs/deployment-safety.md)を参照してください。
 
 ## 制約・未検証事項
 
@@ -235,6 +261,9 @@ python -m pytest -q tests image-to-description/test_image_description.py
 
 ## ドキュメント
 
+- [AIエージェント向け指示](AGENTS.md)
+- [デプロイ安全設計](docs/deployment-safety.md)
+- [Execution Planテンプレート](docs/plans/TEMPLATE.md)
 - [開発ロードマップ](docs/ROADMAP.md)
 - [運用・復旧手順](docs/operations_runbook.md)
 - [利用者向け確認事項](docs/user_action_checklist.md)
