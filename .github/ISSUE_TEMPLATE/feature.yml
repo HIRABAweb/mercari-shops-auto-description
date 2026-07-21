@@ -1,0 +1,153 @@
+name: Feature request
+description: Define a feature with testable acceptance criteria and explicit safety boundaries.
+title: "[Feature] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, production identifiers, customer data, or credentials. AI agents must follow `AGENTS.md`.
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的
+      description: Who benefits, and what outcome should change?
+    validations:
+      required: true
+  - type: textarea
+    id: current_problem
+    attributes:
+      label: 現在の問題
+      description: Describe the current observable behavior and evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: 期待する動作
+      description: Describe externally observable behavior, not only implementation details.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: 受け入れ条件
+      description: Use objective, mechanically verifiable checklist items.
+      placeholder: |
+        - [ ] Given ..., when ..., then ...
+        - [ ] `python scripts/check.py` succeeds
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 対象外
+      description: State behaviors and systems this task must not change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: change_areas
+    attributes:
+      label: 変更予定領域
+      placeholder: "Example: review-ui/, tests/test_review_ui.py"
+    validations:
+      required: true
+
+  - type: textarea
+    id: forbidden_areas
+    attributes:
+      label: 変更禁止領域
+      description: Include shared contracts or components that must remain untouched.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: 共有契約への影響
+      description: CSV schema/encoding, GCS names, Sheet columns, entry points, env vars, or cross-component payloads. Write "なし" only after checking.
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: セキュリティ・データ整合性・外部サービスのリスク
+      description: Include auth/CSRF, batch isolation, stale CSV, formulas, concurrent writes, GCP/Sheets/GCS/Gemini, and real-product impact as applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: 必要なテストと検証方法
+      description: Name test files, commands, and evidence required for completion.
+      placeholder: |
+        - Tests:
+        - `python scripts/check.py`
+        - Manual evidence:
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: ロールバック方法
+      description: Explain how to restore code/data safely. Write "不要" with a reason if not applicable.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: デプロイが必要か
+      options:
+        - "不要"
+        - "必要（AGENTS.mdの個別承認が必要）"
+        - "要確認"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: privileged_changes
+    attributes:
+      label: IAM・IAP・Secret・API・Project・bucket変更が必要か
+      description: AI agents cannot execute these changes even after conversational approval.
+      options:
+        - "不要"
+        - "必要（人間専用作業として分離する）"
+        - "要確認"
+    validations:
+      required: true
+
+  - type: textarea
+    id: approvals
+    attributes:
+      label: 人間の承認が必要な事項
+      description: List shared-contract, external-service, deployment, traffic, and other decisions.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: parallel
+    attributes:
+      label: 並列作業が可能か
+      options:
+        - "可能（担当境界を下欄へ記載）"
+        - "不可"
+        - "要確認"
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 他タスクとの依存関係・並列担当の契約
+      description: List ordering, allowed files, avoided files, and integration checks.
+    validations:
+      required: true
