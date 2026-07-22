@@ -1,0 +1,137 @@
+name: Bug report
+description: Report a reproducible defect with safety boundaries and objective completion criteria.
+title: "[Bug] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, production identifiers, customer data, or credentials. Do not reproduce against production unless a human-run plan has been approved.
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的・影響
+      description: Who is affected, how severely, and what safe outcome is required?
+    validations:
+      required: true
+  - type: textarea
+    id: current_problem
+    attributes:
+      label: 現在の問題
+      description: Include actual behavior, frequency, and sanitized evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: ローカル再現手順
+      description: Use fakes/fixtures. Do not instruct an agent to mutate production data or call paid services.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: 受け入れ条件
+      placeholder: |
+        - [ ] A regression test fails before the fix and passes after it
+        - [ ] `python scripts/check.py` succeeds
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 変更予定領域・対象外・変更禁止領域
+      description: Name allowed files, non-goals, and protected contracts/components.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: 共有契約への影響
+      description: CSV schema/encoding, GCS names, Sheet columns, entry points, env vars, or payloads. Write "なし" only after checking.
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: セキュリティ・データ整合性・外部サービスのリスク
+      description: Include auth/CSRF, batch isolation, stale CSV, formulas, locks/concurrency, GCP/Sheets/GCS/Gemini, and real-product impact as applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: 必要なテストと検証方法
+      description: Name regression tests, commands, fixtures, and evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: ロールバック方法
+      description: Include data recovery implications; write "不要" with a reason if not applicable.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: デプロイが必要か
+      options:
+        - "不要"
+        - "必要（AGENTS.mdの個別承認が必要）"
+        - "要確認"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: privileged_changes
+    attributes:
+      label: IAM・IAP・Secret・API・Project・bucket変更が必要か
+      options:
+        - "不要"
+        - "必要（人間専用作業として分離する）"
+        - "要確認"
+    validations:
+      required: true
+
+  - type: textarea
+    id: approvals
+    attributes:
+      label: 人間の承認が必要な事項
+    validations:
+      required: true
+
+  - type: dropdown
+    id: parallel
+    attributes:
+      label: 並列作業が可能か
+      options:
+        - "可能（担当境界を下欄へ記載）"
+        - "不可"
+        - "要確認"
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 他タスクとの依存関係・並列担当の契約
+      description: List ordering, allowed/avoided files, and integration checks.
+    validations:
+      required: true
