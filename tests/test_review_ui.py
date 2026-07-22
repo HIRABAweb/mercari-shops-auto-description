@@ -851,10 +851,10 @@ def test_save_approve_updates_draft_before_approval(monkeypatch):
     )
 
     assert response.status_code == 302
-    assert [call[0] for call in calls] == ["update", "delete_csv", "approve"]
-    assert calls[0][1][2][module.TITLE_FIELD] == "Updated title"
-    assert calls[0][1][2][module.PRICE_FIELD] == "12345"
-    assert calls[1][1] == ("2026-07-07",)
+    assert [call[0] for call in calls] == ["delete_csv", "update", "approve"]
+    assert calls[0][1] == ("2026-07-07",)
+    assert calls[1][1][2][module.TITLE_FIELD] == "Updated title"
+    assert calls[1][1][2][module.PRICE_FIELD] == "12345"
 
 
 def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
@@ -883,8 +883,96 @@ def test_save_without_approval_returns_item_to_needs_review(monkeypatch):
     )
 
     assert response.status_code == 302
-    assert [call[0] for call in calls] == ["update", "delete_csv", "needs_review"]
+    assert [call[0] for call in calls] == ["delete_csv", "update", "needs_review"]
     assert calls[2][1] == ("2026-07-07", "A0001")
+
+
+@pytest.mark.parametrize("action", ["save", "save_approve"])
+def test_save_aborts_before_mutation_when_csv_invalidation_fails(monkeypatch, action):
+    module = load_review_ui_module()
+    client = module.app.test_client()
+    monkeypatch.setattr(
+        module,
+        "delete_approved_csv_if_exists",
+        lambda *args: (_ for _ in ()).throw(
+            module.ApprovedCsvInvalidationError("storage unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "update_draft_item",
+        lambda *args: pytest.fail("draft must not change when CSV invalidation fails"),
+    )
+    monkeypatch.setattr(
+        module,
+        "approve_review_item",
+        lambda *args: pytest.fail("approval must not change when CSV invalidation fails"),
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_review_item_needs_review",
+        lambda *args: pytest.fail("review status must not change when CSV invalidation fails"),
+    )
+
+    response = client.post(
+        "/batches/2026-07-07/items/A0001",
+        data={
+            "csrf_token": csrf_from_session(client),
+            "action": action,
+            module.TITLE_FIELD: "Must not be saved",
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/batches/2026-07-07/items/A0001")
+    with client.session_transaction() as session:
+        messages = [message for _, message in session["_flashes"]]
+    assert any("could not be invalidated" in message for message in messages)
+
+
+def test_delete_approved_csv_ignores_missing_object(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+
+    class FakeBlob:
+        def delete(self):
+            raise module.NotFound("missing")
+
+    class FakeBucket:
+        def blob(self, object_name):
+            assert object_name == "exports/2026-07-07/approved/mercari_shops.csv"
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            assert bucket_name == "product-images"
+            return FakeBucket()
+
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+
+    module.delete_approved_csv_if_exists("2026-07-07")
+
+
+def test_delete_approved_csv_reports_storage_failure(monkeypatch):
+    module = load_review_ui_module()
+    monkeypatch.setenv("PRODUCT_BUCKET_NAME", "product-images")
+
+    class FakeBlob:
+        def delete(self):
+            raise PermissionError("denied")
+
+    class FakeBucket:
+        def blob(self, object_name):
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def bucket(self, bucket_name):
+            return FakeBucket()
+
+    monkeypatch.setattr(module, "storage_client", lambda: FakeStorageClient())
+
+    with pytest.raises(module.ApprovedCsvInvalidationError):
+        module.delete_approved_csv_if_exists("2026-07-07")
 
 
 def test_standalone_approve_route_is_not_available():
