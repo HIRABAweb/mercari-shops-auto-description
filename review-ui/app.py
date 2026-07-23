@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 
 from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 
@@ -95,6 +96,10 @@ class MercariExportValidationError(ValueError):
     def __init__(self, issues: list[MercariValidationIssue]) -> None:
         self.issues = issues
         super().__init__("; ".join(issue.display_message() for issue in issues))
+
+
+class ApprovedCsvInvalidationError(RuntimeError):
+    """Raised when an existing approved CSV cannot be made unavailable safely."""
 
 
 def create_app() -> Flask:
@@ -211,11 +216,18 @@ def create_app() -> Flask:
         if PRICE_FIELD in updates:
             updates[PRICE_FIELD] = sanitize_price(updates[PRICE_FIELD])
         try:
+            delete_approved_csv_if_exists(batch_id)
+        except ApprovedCsvInvalidationError:
+            flash(
+                "Draft was not saved because the existing approved CSV could not be "
+                "invalidated. Try again after storage access is restored."
+            )
+            return redirect(url_for("item_detail", batch_id=batch_id, product_code=product_code))
+        try:
             update_draft_item(batch_id, product_code, updates)
         except KeyError:
             flash("Draft row is missing. Run Repair from GCS, then save again.")
             return redirect(url_for("batch_detail", batch_id=batch_id))
-        delete_approved_csv_if_exists(batch_id)
         if request.form.get("action") == "save_approve":
             approve_review_item(batch_id, product_code, current_utc_timestamp())
             flash("Draft saved and item approved.")
@@ -762,11 +774,15 @@ def delete_approved_csv_if_exists(batch_id: str) -> None:
         object_name = approved_csv_object_name(batch_id)
         bucket = storage_client().bucket(required_env("PRODUCT_BUCKET_NAME"))
         blob = bucket.blob(object_name)
-        if blob.exists():
-            blob.delete()
-            LOGGER.info("Deleted stale approved CSV after draft edit: %s", object_name)
-    except Exception:
+        blob.delete()
+    except NotFound:
+        return
+    except Exception as error:
         LOGGER.exception("Failed to delete stale approved CSV. batch_id=%s", batch_id)
+        raise ApprovedCsvInvalidationError(
+            f"Failed to invalidate approved CSV for batch {batch_id}."
+        ) from error
+    LOGGER.info("Deleted stale approved CSV before draft edit: %s", object_name)
 
 
 def safe_filename(value: str) -> str:
