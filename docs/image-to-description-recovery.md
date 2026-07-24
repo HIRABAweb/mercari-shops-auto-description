@@ -23,7 +23,7 @@
 
 512 MiBで再検証し、メモリ超過が再発した場合だけ1 GiBへの増加を検討する。256 MiBへの縮小は、最大使用量へ十分な余裕があることを実測するまで行わない。
 
-## デプロイ準備
+## デプロイ準備と実績
 
 `scripts/prepare_deploy_image_to_description.ps1` は対象を固定し、次を行う。
 
@@ -32,7 +32,9 @@
 3. 対象、ソースコミット、メモリ、Concurrency、Timeout、完全なコマンドを表示する。
 4. `-Execute` がなければ外部操作を行わず終了する。
 
-このCloud Functionは現在のAI実行allowlistに含まれていないため、Codexはスクリプトのデプロイ部分を実行しない。人間が実行する場合も、表示された対象とコマンドを再確認する。
+2026-07-25に、PR #12のマージコミット `ad7edae` を `image-to-description` へデプロイした。稼働中Revisionは `image-to-description-00004-hub` で、メモリ512 MiB、Concurrency 1、Timeout 540秒、トリガーバケット `test-review-ui`、再試行無効を確認済みである。
+
+デプロイ後の商品テストは未実施である。1商品canaryが成功してから10商品テストへ進み、メモリ不足、残存ロック、生成物の不足・重複がないことを確認する。GCS書き込み、`_SUCCESS.txt` 再投入、Gemini/Vertex AI呼び出しを伴う検証は、ルート `AGENTS.md` の事前確認と承認条件に従う。
 
 ## 期限切れロックからの復旧
 

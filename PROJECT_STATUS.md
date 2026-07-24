@@ -1,5 +1,27 @@
 # PROJECT_STATUS.md
 
+## 2026-07-25 更新: image-to-descriptionのメモリ対策をデプロイ
+
+10商品テストでは、旧実装が画像本体を関数メモリへ読み込んだことで使用量が約551 MiBへ達し、512 MiB上限を超えた処理が強制終了しました。6商品が完了し、4商品には `_description_processing.lock` が残りました。
+
+PR #12のマージコミット `ad7edae` をCloud Run Function `image-to-description` へデプロイしました。稼働中Revisionは `image-to-description-00004-hub` で、次の設定を読み取り専用確認済みです。
+
+- Project: `gen-lang-client-0122735738`
+- Region: `asia-northeast1`
+- State: `ACTIVE`
+- Memory: 512 MiB
+- Concurrency: 1
+- Timeout: 540秒
+- Trigger: `test-review-ui` の `google.cloud.storage.object.v1.finalized`
+- Retry: 無効
+- Runtime service account: `183777458573-compute@developer.gserviceaccount.com`
+
+新実装は画像を関数へダウンロードせず、GCS URIとしてVertex AIへ渡します。15分以上経過した処理ロックは、確認したGCS世代番号に一致する場合だけ回収します。デプロイ時にトリガー、サービスアカウント、環境変数、Secret、IAM、IAP、API、バケット設定は変更していません。
+
+デプロイ後の商品投入、既存4商品の `_SUCCESS.txt` 再投入、Gemini呼び出しは未実施です。次は1商品をcanaryとして確認し、成功後に10商品を処理して、生成物件数、残存ロック、重複、メモリ不足の再発有無を確認します。
+
+---
+
 ## 2026-07-19 更新: 承認フローのmain統合確認・AI開発基盤整備
 
 ### 結論
