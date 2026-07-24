@@ -5,6 +5,7 @@ import os
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,10 +18,14 @@ class FakePreconditionFailed(Exception):
     """Stand-in for the GCS precondition exception."""
 
 
+class FakeNotFound(Exception):
+    """Stand-in for a missing GCS object."""
+
+
 class FakePart:
     @staticmethod
-    def from_data(data, mime_type):
-        return {"data": data, "mime_type": mime_type}
+    def from_uri(uri, mime_type):
+        return {"uri": uri, "mime_type": mime_type}
 
 
 def load_module():
@@ -44,6 +49,7 @@ def load_module():
     google_api_core.__path__ = []
     exceptions = types.ModuleType("google.api_core.exceptions")
     exceptions.PreconditionFailed = FakePreconditionFailed
+    exceptions.NotFound = FakeNotFound
     google_api_core.exceptions = exceptions
     google.cloud = google_cloud
     google.api_core = google_api_core
@@ -66,20 +72,35 @@ def load_module():
 
 
 class FakeBlob:
-    def __init__(self, name, *, data=b"image", size=None, content_type="image/jpeg"):
+    def __init__(
+        self,
+        name,
+        *,
+        data=b"image",
+        size=None,
+        content_type="image/jpeg",
+        created=False,
+        generation=None,
+        updated=None,
+    ):
         self.name = name
         self.data = data
         self.size = len(data) if size is None else size
         self.content_type = content_type
         self.exists_result = False
-        self.created = False
+        self.created = created
+        self.generation = generation if generation is not None else (1 if created else None)
+        self.updated = updated
         self.upload_calls = []
         self.delete_calls = []
+        self.download_as_bytes_calls = 0
+        self.delete_exception = None
 
     def exists(self):
         return self.exists_result
 
     def download_as_bytes(self):
+        self.download_as_bytes_calls += 1
         return self.data
 
     def download_as_text(self, encoding=None):
@@ -89,10 +110,24 @@ class FakeBlob:
         if kwargs.get("if_generation_match") == 0 and self.created:
             raise FakePreconditionFailed("already exists")
         self.created = True
+        self.generation = (self.generation or 0) + 1
+        self.updated = datetime.now(timezone.utc)
         self.upload_calls.append((data, kwargs))
 
     def delete(self, **kwargs):
         self.delete_calls.append(kwargs)
+        if self.delete_exception is not None:
+            raise self.delete_exception
+        if not self.created:
+            raise FakeNotFound("missing")
+        if kwargs.get("if_generation_match") != self.generation:
+            raise FakePreconditionFailed("generation changed")
+        self.created = False
+        self.generation = None
+
+    def reload(self):
+        if not self.created:
+            raise FakeNotFound("missing")
 
 
 class FakeBucket:
@@ -248,8 +283,9 @@ class ImageDescriptionTest(unittest.TestCase):
         image_parts = self.module.load_image_parts("images", "A0001")
 
         self.assertEqual(len(image_parts), 20)
-        self.assertEqual(image_parts[0]["data"], b"1")
-        self.assertEqual(image_parts[-1]["data"], b"20")
+        self.assertEqual(image_parts[0]["uri"], "gs://images/A0001/001.jpg")
+        self.assertEqual(image_parts[-1]["uri"], "gs://images/A0001/020.jpg")
+        self.assertTrue(all(blob.download_as_bytes_calls == 0 for blob in blobs))
 
     def test_images_over_the_total_size_limit_raise_an_error(self):
         blobs = [
@@ -272,6 +308,53 @@ class ImageDescriptionTest(unittest.TestCase):
         self.assertIsNone(second_lock)
         self.assertEqual(first_lock.upload_calls[0][1]["if_generation_match"], 0)
 
+    def test_stale_processing_lock_is_recovered_by_generation(self):
+        now = datetime(2026, 7, 24, 10, 0, tzinfo=timezone.utc)
+        lock = FakeBlob(
+            "A0001/_description_processing.lock",
+            created=True,
+            generation=7,
+            updated=now - timedelta(minutes=16),
+        )
+        bucket = FakeBucket([lock])
+
+        claimed_lock = self.module.acquire_processing_lock(bucket, "A0001", now=now)
+
+        self.assertIs(claimed_lock, lock)
+        self.assertEqual(lock.delete_calls, [{"if_generation_match": 7}])
+        self.assertEqual(lock.upload_calls[-1][1]["if_generation_match"], 0)
+
+    def test_fresh_processing_lock_is_not_recovered(self):
+        now = datetime(2026, 7, 24, 10, 0, tzinfo=timezone.utc)
+        lock = FakeBlob(
+            "A0001/_description_processing.lock",
+            created=True,
+            generation=8,
+            updated=now - timedelta(minutes=14),
+        )
+        bucket = FakeBucket([lock])
+
+        claimed_lock = self.module.acquire_processing_lock(bucket, "A0001", now=now)
+
+        self.assertIsNone(claimed_lock)
+        self.assertEqual(lock.delete_calls, [])
+
+    def test_stale_recovery_does_not_delete_a_replaced_lock(self):
+        now = datetime(2026, 7, 24, 10, 0, tzinfo=timezone.utc)
+        lock = FakeBlob(
+            "A0001/_description_processing.lock",
+            created=True,
+            generation=9,
+            updated=now - timedelta(minutes=16),
+        )
+        lock.delete_exception = FakePreconditionFailed("generation changed")
+        bucket = FakeBucket([lock])
+
+        claimed_lock = self.module.acquire_processing_lock(bucket, "A0001", now=now)
+
+        self.assertIsNone(claimed_lock)
+        self.assertEqual(lock.delete_calls, [{"if_generation_match": 9}])
+
     def test_failed_generation_releases_lock_and_raises_for_retry(self):
         source = FakeBlob("A0001/_SUCCESS.txt", data=b"size: 10cm")
         bucket = FakeBucket([source])
@@ -288,7 +371,7 @@ class ImageDescriptionTest(unittest.TestCase):
             self.module.generate_description_from_trigger(event)
 
         lock = bucket.blobs["A0001/_description_processing.lock"]
-        self.assertEqual(lock.delete_calls, [{}])
+        self.assertEqual(lock.delete_calls, [{"if_generation_match": 1}])
 
 
 if __name__ == "__main__":

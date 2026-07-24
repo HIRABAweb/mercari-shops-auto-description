@@ -2,16 +2,18 @@
 
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import functions_framework
 import vertexai
-from google.api_core.exceptions import PreconditionFailed
+from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 from vertexai.generative_models import GenerativeModel, Part
 
 SUCCESS_FILE_NAME = "_SUCCESS.txt"
 DESCRIPTION_FILE_NAME = "_description.txt"
 PROCESSING_LOCK_FILE_NAME = "_description_processing.lock"
+PROCESSING_LOCK_STALE_AFTER = timedelta(minutes=15)
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 MAX_IMAGE_COUNT = 20
 MAX_IMAGE_TOTAL_BYTES = 100 * 1000 * 1000
@@ -113,7 +115,7 @@ def image_sort_key(blob) -> tuple[int, str]:
 
 
 def load_image_parts(bucket_name: str, folder_path: str) -> list[Part]:
-    """Download at most 20 number-sorted images totaling at most 100 MB."""
+    """Reference at most 20 number-sorted GCS images totaling at most 100 MB."""
     image_blobs = sorted(
         (
             blob
@@ -134,26 +136,88 @@ def load_image_parts(bucket_name: str, folder_path: str) -> list[Part]:
                 f"画像合計サイズが上限 {MAX_IMAGE_TOTAL_BYTES} bytes を超えています。"
             )
         print(f"INFO: 処理対象の画像を発見: {blob.name}")
-        image_bytes = blob.download_as_bytes()
-        image_size = max(declared_size, len(image_bytes))
+        image_size = declared_size
         if total_bytes + image_size > MAX_IMAGE_TOTAL_BYTES:
             raise ValueError(
                 f"画像合計サイズが上限 {MAX_IMAGE_TOTAL_BYTES} bytes を超えています。"
             )
         total_bytes += image_size
-        image_parts.append(Part.from_data(data=image_bytes, mime_type=blob.content_type))
+        image_parts.append(
+            Part.from_uri(
+                uri=f"gs://{bucket_name}/{blob.name}",
+                mime_type=blob.content_type,
+            )
+        )
     return image_parts
 
 
-def acquire_processing_lock(bucket, folder_path: str):
-    """Atomically claim a product folder so duplicate events run only once."""
+def recover_stale_processing_lock(lock_blob, folder_path: str, *, now: datetime) -> bool:
+    """Delete only the observed stale lock generation, then allow one retry."""
+    try:
+        lock_blob.reload()
+    except NotFound:
+        return True
+
+    updated = lock_blob.updated
+    generation = lock_blob.generation
+    if updated is None or generation is None:
+        print(
+            "WARNING: 処理ロックのメタデータが不足しているため回収しません: "
+            f"{folder_path}"
+        )
+        return False
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    if now - updated < PROCESSING_LOCK_STALE_AFTER:
+        return False
+
+    try:
+        lock_blob.delete(if_generation_match=generation)
+        print(f"WARNING: 期限切れの処理ロックを回収しました: {folder_path}")
+    except (NotFound, PreconditionFailed):
+        print(f"INFO: 回収中に処理ロックが更新されました: {folder_path}")
+    return True
+
+
+def acquire_processing_lock(bucket, folder_path: str, *, now: datetime | None = None):
+    """Atomically claim a folder, safely recovering an expired lock generation."""
     lock_blob = bucket.blob(f"{folder_path}/{PROCESSING_LOCK_FILE_NAME}")
     try:
         lock_blob.upload_from_string("", content_type="text/plain", if_generation_match=0)
     except PreconditionFailed:
-        print(f"INFO: フォルダ '{folder_path}' は別の処理が実行中です。")
-        return None
+        recovery_time = now or datetime.now(timezone.utc)
+        if not recover_stale_processing_lock(
+            lock_blob,
+            folder_path,
+            now=recovery_time,
+        ):
+            print(f"INFO: フォルダ '{folder_path}' は別の処理が実行中です。")
+            return None
+        try:
+            lock_blob.upload_from_string(
+                "",
+                content_type="text/plain",
+                if_generation_match=0,
+            )
+        except PreconditionFailed:
+            print(f"INFO: 別の処理が先にロックを取得しました: {folder_path}")
+            return None
     return lock_blob
+
+
+def release_processing_lock(lock_blob, folder_path: str) -> None:
+    """Delete only the lock generation acquired by this invocation."""
+    generation = lock_blob.generation
+    if generation is None:
+        print(
+            "WARNING: 処理ロックの世代番号が不明なため削除しません: "
+            f"{folder_path}"
+        )
+        return
+    try:
+        lock_blob.delete(if_generation_match=generation)
+    except (NotFound, PreconditionFailed):
+        print(f"INFO: 処理ロックは既に削除または更新されています: {folder_path}")
 
 
 def add_measurement_review_marker(description_text: str, measurement_available: bool) -> str:
@@ -222,6 +286,6 @@ def generate_description_from_trigger(cloud_event):
     finally:
         if processing_lock is not None:
             try:
-                processing_lock.delete()
+                release_processing_lock(processing_lock, folder_path)
             except Exception as error:
                 print(f"WARNING: 処理ロックの削除に失敗しました: {error}")
