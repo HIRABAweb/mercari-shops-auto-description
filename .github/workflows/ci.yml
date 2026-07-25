@@ -36,3 +36,6 @@ jobs:
 
       - name: Run shared verification
         run: python scripts/check.py
+
+      - name: Verify Review UI JavaScript syntax
+        run: node --check review-ui/static/item_detail.js
