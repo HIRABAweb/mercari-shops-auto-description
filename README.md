@@ -164,7 +164,7 @@ exports/
 
 `_SUCCESS.txt` のアップロードをトリガーに、同じ商品フォルダ内の画像と採寸・状態メモをGeminiへ送信し、商品説明生成用の `_description.txt` をCloud Storageへ保存します。
 
-画像は関数メモリへ全件ダウンロードせず、GCS URIとしてVertex AIへ渡します。処理ロックは15分以上更新されていない場合だけ期限切れ候補とし、GCS世代番号の条件付き削除で新しいロックを保護します。推奨デプロイ設定はメモリ512 MiB、Concurrency 1、Timeout 540秒です。詳細は `docs/image-to-description-recovery.md` を参照してください。
+画像は関数メモリへ全件ダウンロードせず、GCS URIとしてVertex AIへ渡します。処理ロックは15分以上更新されていない場合だけ期限切れ候補とし、GCS世代番号の条件付き削除で新しいロックを保護します。後続処理が `_description.txt` を `_processed.txt` へ移動した後も処理済みと判定し、遅延した重複イベントによるAI再生成を防ぎます。推奨デプロイ設定はメモリ512 MiB、Concurrency 1、Timeout 540秒です。詳細は `docs/image-to-description-recovery.md` を参照してください。
 
 ### `yahuoku-to-mercarishops`
 
@@ -185,6 +185,8 @@ exports/
 Cloud Run上で動作するレビュー用フロントエンドです。
 
 Google Sheets上の下書き行を確認・編集し、承認済みの行だけをメルカリShops投入用CSVとして再生成します。
+
+ユーザー入力やAI生成文はGoogle SheetsへRAW値として書き込み、`=` や `+` などで始まる文字列も数式として評価させません。
 
 ## Google Sheets承認フロー
 

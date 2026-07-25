@@ -23,7 +23,7 @@
 
 512 MiBで再検証し、メモリ超過が再発した場合だけ1 GiBへの増加を検討する。256 MiBへの縮小は、最大使用量へ十分な余裕があることを実測するまで行わない。
 
-## デプロイ準備
+## デプロイ準備と実績
 
 `scripts/prepare_deploy_image_to_description.ps1` は対象を固定し、次を行う。
 
@@ -32,7 +32,35 @@
 3. 対象、ソースコミット、メモリ、Concurrency、Timeout、完全なコマンドを表示する。
 4. `-Execute` がなければ外部操作を行わず終了する。
 
-このCloud Functionは現在のAI実行allowlistに含まれていないため、Codexはスクリプトのデプロイ部分を実行しない。人間が実行する場合も、表示された対象とコマンドを再確認する。
+2026-07-25に、PR #12のマージコミット `ad7edae` を `image-to-description` へデプロイした。稼働中Revisionは `image-to-description-00004-hub` で、メモリ512 MiB、Concurrency 1、Timeout 540秒、トリガーバケット `test-review-ui`、再試行無効を確認済みである。
+
+デプロイ後の商品テストは未実施である。1商品canaryが成功してから10商品テストへ進み、メモリ不足、残存ロック、生成物の不足・重複がないことを確認する。GCS書き込み、`_SUCCESS.txt` 再投入、Gemini/Vertex AI呼び出しを伴う検証は、ルート `AGENTS.md` の事前確認と承認条件に従う。
+
+## デプロイ後canary
+
+最初のcanaryには、旧10商品テストで失敗した商品のうち、次の条件をすべて満たす1商品だけを使う。
+
+- 対象が `test-review-ui/exports/202603` 配下である。
+- `_SUCCESS.txt` と1枚以上の画像が存在する。
+- `_description.txt` が存在しない。
+- `_description_processing.lock` が存在する場合は更新から15分以上経過している。
+- `result.json`、`review_required.csv`、`mercari.csv`、`_DONE.txt` など、成功を示す後続生成物が存在しない。
+
+2026-07-25の読み取り専用確認では、`Photos-3-001 (3)` が10画像、`_SUCCESS.txt` 1件、15分以上経過した `_description_processing.lock` 1件を持ち、`_description.txt`、`_processed.txt`、後続生成物を持たないことを確認した。この商品を最初のcanary候補とする。
+
+GCS書き込み前に、対象商品、オブジェクト数、画像数、トリガーファイル数、生成物の不存在、コピー先の衝突状態を読み取り専用で確認する。確認結果が想定と異なる場合は書き込まない。
+
+canaryでは既存の `_SUCCESS.txt` だけを新しいGCS世代として再投入し、画像や他のテキストをコピーし直さない。この1回の投入により、最大で `image-to-description` のVertex AI呼び出し1回と、生成された `_description.txt` を受ける `yahuoku-to-mercarishops` のGemini呼び出し1回が起動し得る。
+
+次のすべてを確認できた場合だけ10商品テストへ進む。
+
+- `_description.txt` が1件生成される。
+- `_description_processing.lock` が残らない。
+- 後続生成物が各1件生成され、同じ商品の重複がない。
+- Review UIに対象商品が1件だけ反映される。
+- Functionが `ACTIVE` を維持し、メモリ不足による強制終了が確認されない。
+
+canaryのGCS事前確認、再投入、事後確認は完全な対象とコマンドを提示して承認を得る。ログ確認が必要になった場合も対象Function、時間範囲、取得フィールドを限定し、別途承認を得る。
 
 ## 期限切れロックからの復旧
 
