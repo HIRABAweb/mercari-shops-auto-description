@@ -39,7 +39,7 @@
 - [ ] Artifact Registryの古いimageを定期的に整理する
 - [x] Sheetsの新規行追加をAPI側appendへ変更し、事前計算した行番号の競合による欠落・上書きを防止する
 - [ ] Sheets書き込みのクロスインスタンス重複を期限付き共有ロックで防止する（設計は `docs/sheets-concurrency.md`）
-- [ ] Sheetsへ書くユーザー入力・AI生成文の数式インジェクションを防止する
+- [x] Sheetsへ書くユーザー入力・AI生成文の数式インジェクションを防止する
 - [x] 承認状態変更後の古い承認済みCSV削除に失敗した場合、利用可能なまま残さずfail closedにする
 - [ ] 異常終了後のstale processing lockを安全に回復できるようにする
 

@@ -186,7 +186,7 @@ def replace_sheet_rows(worksheet, rows: list[list[str]], column_count: int) -> N
     worksheet.update(
         values=rows,
         range_name="A1",
-        value_input_option="USER_ENTERED",
+        value_input_option="RAW",
     )
     if existing_row_count > len(rows):
         worksheet.batch_clear(

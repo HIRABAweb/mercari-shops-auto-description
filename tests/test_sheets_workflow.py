@@ -110,6 +110,21 @@ def test_append_sheet_row_uses_server_side_append_without_precomputed_row_number
     assert worksheet.update_calls == []
 
 
+def test_replace_sheet_rows_writes_formula_like_values_as_raw_text():
+    worksheet = FakeWorksheet("Approved_Mercari_CSV", [["old"]])
+    rows = [
+        ["商品名", "商品説明"],
+        ["=IMPORTXML(\"https://example.invalid\", \"//x\")", "+SUM(1, 1)"],
+    ]
+
+    sheets_workflow.replace_sheet_rows(worksheet, rows, 2)
+
+    assert worksheet.values == rows
+    assert worksheet.update_calls == [
+        ("A1", rows, {"value_input_option": "RAW"})
+    ]
+
+
 def test_write_phase1_sheet_rows_creates_headers_and_is_idempotent(monkeypatch):
     spreadsheet = FakeSpreadsheet()
     monkeypatch.setattr(sheets_workflow, "get_spreadsheet", lambda: spreadsheet)
