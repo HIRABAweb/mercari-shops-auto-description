@@ -20,6 +20,14 @@ PR #12のマージコミット `ad7edae` をCloud Run Function `image-to-descrip
 
 デプロイ後の商品投入、既存4商品の `_SUCCESS.txt` 再投入、Gemini呼び出しは未実施です。次は1商品をcanaryとして確認し、成功後に10商品を処理して、生成物件数、残存ロック、重複、メモリ不足の再発有無を確認します。
 
+2026-07-25の読み取り専用GCS確認では、旧10商品テストの状態を次のように確認しました。オブジェクト内容は取得していません。
+
+- 成功6商品: `BALLY　黒　革靴`、`CTHY　厚底靴　黒`、`Photos-3-001 (1)`、`marka　黒Vネックプルオーバー`、`セオリーユニクロポロシャツ`、`ユニクロJWA`
+- 成功商品はそれぞれ `_processed.txt` と `mercari.csv`、`yahoo.csv`、`review_required.csv`、`result.json`、`_DONE.txt` を保持する。
+- 失敗4商品: `BALLY　茶色タッセル革靴`、`Danner　黒　ブーツ`、`Photos-3-001 (3)`、`三陽山長　革靴(茶色)`
+- 失敗商品はそれぞれ `_description_processing.lock` が残り、`_processed.txt` と後続生成物は存在しない。
+- 最初のcanary候補は、10画像・1トリガー・1残存ロックを持つ `Photos-3-001 (3)` とする。
+
 ---
 
 ## 2026-07-19 更新: 承認フローのmain統合確認・AI開発基盤整備

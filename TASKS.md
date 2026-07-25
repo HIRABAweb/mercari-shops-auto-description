@@ -23,6 +23,7 @@
 - [x] `image-to-description` の画像入力をGCS URI参照へ変更する
 - [x] 15分経過したprocessing lockをGCS世代番号条件付きで安全に回収する
 - [x] `image-to-description-00004-hub` をメモリ512 MiB・Concurrency 1・Timeout 540秒でデプロイする
+- [x] 旧10商品の生成物を読み取り専用で確認し、成功6商品と残存ロック付き失敗4商品を特定する
 - [ ] 1商品canaryで `_description.txt` 生成、ロック解放、後続生成物、Review UI反映を確認する
 - [ ] 10商品テストで全件完了、重複なし、残存ロックなし、メモリ不足なしを確認する
 - [ ] 旧テストで失敗した4商品の再処理要否を判断し、必要な場合は人間が対象を限定して `_SUCCESS.txt` を再投入する

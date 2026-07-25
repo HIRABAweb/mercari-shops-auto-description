@@ -46,6 +46,8 @@
 - `_description_processing.lock` が存在する場合は更新から15分以上経過している。
 - `result.json`、`review_required.csv`、`mercari.csv`、`_DONE.txt` など、成功を示す後続生成物が存在しない。
 
+2026-07-25の読み取り専用確認では、`Photos-3-001 (3)` が10画像、`_SUCCESS.txt` 1件、15分以上経過した `_description_processing.lock` 1件を持ち、`_description.txt`、`_processed.txt`、後続生成物を持たないことを確認した。この商品を最初のcanary候補とする。
+
 GCS書き込み前に、対象商品、オブジェクト数、画像数、トリガーファイル数、生成物の不存在、コピー先の衝突状態を読み取り専用で確認する。確認結果が想定と異なる場合は書き込まない。
 
 canaryでは既存の `_SUCCESS.txt` だけを新しいGCS世代として再投入し、画像や他のテキストをコピーし直さない。この1回の投入により、最大で `image-to-description` のVertex AI呼び出し1回と、生成された `_description.txt` を受ける `yahuoku-to-mercarishops` のGemini呼び出し1回が起動し得る。
