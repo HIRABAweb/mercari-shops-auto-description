@@ -292,8 +292,14 @@ def append_draft_row_if_missing(
 
 
 def append_sheet_row(worksheet, row: list[str], column_count: int) -> None:
-    row_number = len(worksheet_values(worksheet)) + 1
-    update_worksheet_row(worksheet, row_number, row, column_count)
+    end_column = column_letter(column_count)
+    worksheet.append_row(
+        row,
+        value_input_option="RAW",
+        insert_data_option="INSERT_ROWS",
+        table_range=f"A:{end_column}",
+    )
+    invalidate_worksheet_values_cache(worksheet)
 
 
 def update_worksheet_row(worksheet, row_number: int, row: list[str], column_count: int) -> None:
