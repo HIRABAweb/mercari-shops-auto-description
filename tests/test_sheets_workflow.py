@@ -19,6 +19,7 @@ class FakeWorksheet:
         self.title = title
         self.values = values or []
         self.appended_rows = []
+        self.append_calls = []
         self.update_calls = []
         self.batch_clear_calls = []
 
@@ -27,6 +28,7 @@ class FakeWorksheet:
 
     def append_row(self, row, **kwargs):
         self.appended_rows.append(row)
+        self.append_calls.append((row, kwargs))
         self.values.append(row)
 
     def insert_row(self, row, index=1, **kwargs):
@@ -86,6 +88,26 @@ def review_row(product_code: str, field: str, reason: str) -> dict[str, str]:
         REVIEW_REQUIRED_HEADERS[1]: field,
         REVIEW_REQUIRED_HEADERS[-1]: reason,
     }
+
+
+def test_append_sheet_row_uses_server_side_append_without_precomputed_row_number():
+    worksheet = FakeWorksheet("Draft_Mercari_List", [["header"]])
+    row = ["=literal", "second value"]
+
+    sheets_workflow.append_sheet_row(worksheet, row, 2)
+
+    assert worksheet.values == [["header"], row]
+    assert worksheet.append_calls == [
+        (
+            row,
+            {
+                "value_input_option": "RAW",
+                "insert_data_option": "INSERT_ROWS",
+                "table_range": "A:B",
+            },
+        )
+    ]
+    assert worksheet.update_calls == []
 
 
 def test_write_phase1_sheet_rows_creates_headers_and_is_idempotent(monkeypatch):
