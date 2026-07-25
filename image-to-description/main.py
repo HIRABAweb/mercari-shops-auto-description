@@ -12,6 +12,7 @@ from vertexai.generative_models import GenerativeModel, Part
 
 SUCCESS_FILE_NAME = "_SUCCESS.txt"
 DESCRIPTION_FILE_NAME = "_description.txt"
+PROCESSED_FILE_NAME = "_processed.txt"
 PROCESSING_LOCK_FILE_NAME = "_description_processing.lock"
 PROCESSING_LOCK_STALE_AFTER = timedelta(minutes=15)
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
@@ -220,6 +221,11 @@ def release_processing_lock(lock_blob, folder_path: str) -> None:
         print(f"INFO: 処理ロックは既に削除または更新されています: {folder_path}")
 
 
+def description_generation_completed(output_blob, processed_blob) -> bool:
+    """Return whether this product already has generated or processed output."""
+    return output_blob.exists() or processed_blob.exists()
+
+
 def add_measurement_review_marker(description_text: str, measurement_available: bool) -> str:
     """Make missing measurements visible to the human who reviews the listing."""
     if measurement_available:
@@ -240,18 +246,20 @@ def generate_description_from_trigger(cloud_event):
 
     folder_path = os.path.dirname(trigger_file_name)
     output_file_name = f"{folder_path}/{DESCRIPTION_FILE_NAME}"
+    processed_file_name = f"{folder_path}/{PROCESSED_FILE_NAME}"
     bucket = storage_client.bucket(bucket_name)
     output_blob = bucket.blob(output_file_name)
+    processed_blob = bucket.blob(processed_file_name)
     processing_lock = None
     try:
-        if output_blob.exists():
+        if description_generation_completed(output_blob, processed_blob):
             print(f"INFO: フォルダ '{folder_path}' は既に処理済みです。")
             return
 
         processing_lock = acquire_processing_lock(bucket, folder_path)
         if processing_lock is None:
             raise RuntimeError(f"処理ロックを取得できません: {folder_path}")
-        if output_blob.exists():
+        if description_generation_completed(output_blob, processed_blob):
             print(f"INFO: フォルダ '{folder_path}' は既に処理済みです。")
             return
 
