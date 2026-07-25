@@ -85,6 +85,33 @@ def test_healthz_does_not_touch_live_sheets(monkeypatch):
     assert response.text == "ok\n"
 
 
+def test_responses_include_security_headers():
+    module = load_review_ui_module()
+
+    response = module.app.test_client().get("/healthz")
+
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Content-Security-Policy"] == module.CONTENT_SECURITY_POLICY
+    assert response.headers["Permissions-Policy"] == (
+        "camera=(), geolocation=(), microphone=()"
+    )
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert "'unsafe-inline'" not in response.headers["Content-Security-Policy"]
+
+
+def test_cloud_run_session_cookie_is_secure(monkeypatch):
+    monkeypatch.setenv("K_SERVICE", "mercari-review-ui")
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-only-secret")
+
+    module = load_review_ui_module()
+
+    assert module.app.config["SESSION_COOKIE_HTTPONLY"] is True
+    assert module.app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+    assert module.app.config["SESSION_COOKIE_SECURE"] is True
+
+
 def test_category_search_api_returns_ranked_candidates(monkeypatch, tmp_path):
     module = load_review_ui_module()
     category_master = tmp_path / "category_master_updated.csv"
@@ -159,6 +186,8 @@ def test_item_page_renders_main_fields(monkeypatch):
     assert b"data-image-move-up" in response.data
     assert b"data-image-move-down" in response.data
     assert b"data-price-input" in response.data
+    assert b'<script src="/static/item_detail.js" defer></script>' in response.data
+    assert b"document.querySelectorAll" not in response.data
 
 
 def test_item_page_renders_image_previews_through_proxy(monkeypatch):
