@@ -272,6 +272,54 @@ class ImageDescriptionTest(unittest.TestCase):
         self.assertIsNone(claimed_lock)
         self.assertEqual(lock.delete_calls, [{"if_generation_match": 9}])
 
+    def test_processed_description_skips_a_delayed_duplicate_success_event(self):
+        source = FakeBlob("A0001/_SUCCESS.txt", data=b"size: 10cm")
+        processed = FakeBlob("A0001/_processed.txt")
+        processed.exists_result = True
+        bucket = FakeBucket([source, processed])
+        self.module.storage_client = FakeStorageClient(bucket, [])
+        self.module.model = types.SimpleNamespace(
+            generate_content=lambda contents: self.fail(
+                "Vertex AI must not run for a processed product"
+            )
+        )
+        event = types.SimpleNamespace(
+            data={"bucket": "images", "name": "A0001/_SUCCESS.txt"}
+        )
+
+        self.module.generate_description_from_trigger(event)
+
+        self.assertNotIn("A0001/_description_processing.lock", bucket.blobs)
+        self.assertEqual(
+            bucket.blobs["A0001/_description.txt"].upload_calls,
+            [],
+        )
+
+    def test_processed_description_created_during_lock_acquisition_skips_generation(self):
+        source = FakeBlob("A0001/_SUCCESS.txt", data=b"size: 10cm")
+        processed = FakeBlob("A0001/_processed.txt")
+        processed_exists = iter([False, True])
+        processed.exists = lambda: next(processed_exists)
+        bucket = FakeBucket([source, processed])
+        self.module.storage_client = FakeStorageClient(bucket, [])
+        self.module.model = types.SimpleNamespace(
+            generate_content=lambda contents: self.fail(
+                "Vertex AI must not run after another invocation completes"
+            )
+        )
+        event = types.SimpleNamespace(
+            data={"bucket": "images", "name": "A0001/_SUCCESS.txt"}
+        )
+
+        self.module.generate_description_from_trigger(event)
+
+        lock = bucket.blobs["A0001/_description_processing.lock"]
+        self.assertEqual(lock.delete_calls, [{"if_generation_match": 1}])
+        self.assertEqual(
+            bucket.blobs["A0001/_description.txt"].upload_calls,
+            [],
+        )
+
     def test_failed_generation_releases_lock_and_raises_for_retry(self):
         source = FakeBlob("A0001/_SUCCESS.txt", data=b"size: 10cm")
         bucket = FakeBucket([source])

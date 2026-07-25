@@ -73,6 +73,17 @@ CATEGORY_MASTER_FULL_NAME_HEADER = "\u30ab\u30c6\u30b4\u30ea\u540d\uff08\u30d5\u
 APPROVED_CSV_EXPIRES_METADATA = "mercari-image-urls-expire-at"
 APPROVED_CSV_COLUMNS_METADATA = "mercari-template-columns"
 MAX_SIGNED_URL_TTL_HOURS = 168
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "connect-src 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'; "
+    "img-src 'self' data:; "
+    "object-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self'"
+)
 
 
 class RepairResult:
@@ -109,8 +120,23 @@ def create_app() -> Flask:
         static_folder=str(Path(__file__).resolve().parent / "static"),
     )
     app.secret_key = flask_secret_key()
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=bool(os.getenv("K_SERVICE", "").strip()),
+    )
     app.jinja_env.globals["csrf_token"] = csrf_token
     app.jinja_env.globals["image_cache_key"] = image_cache_key
+
+    @app.after_request
+    def add_security_headers(response: Response) -> Response:
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+        response.headers.setdefault("Permissions-Policy", "camera=(), geolocation=(), microphone=()")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
 
     @app.get("/")
     def batches():
