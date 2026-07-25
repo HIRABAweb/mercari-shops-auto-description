@@ -25,6 +25,7 @@ This file is the sole authoritative execution-rule source for Codex in this repo
 - Do not explore, edit, delete, move, stage, or commit unrelated untracked assets. In particular, workspace attachments, `portfolio/`, and the separate apparel-retouch project are outside this repository's development scope.
 - Never use `git add .`. Select changed files explicitly after reviewing `git status` and `git diff`.
 - Commit, push, open/modify a PR, or merge only when the current task explicitly authorizes it. A main merge always requires human approval.
+- Write every pull-request description in full English first, followed by an equivalent full Japanese version. Keep the same sections, facts, validation results, risks, and external evidence or operation records in both languages; do not shorten or omit content in either version.
 - Do not add, remove, or upgrade dependencies or generated lock files without explicit human approval and a documented reason.
 - Do not infer missing requirements. Mark them as unconfirmed and ask a human when the choice affects behavior or a shared contract.
 - Do not broadly format, refactor, or reorganize files outside the task.
